@@ -1,0 +1,90 @@
+name: pdf-reading
+description: "PDF 阅读 suite 基准测试 - 财务研报解析（逐项拆分）"
+default_timeout_s: 300
+
+test_cases:
+  - id: title-extraction
+    description: "解析 page 1 研报标题"
+    prompt: |
+      使用 pdf-reader skill 提取 input/financial_report_1.pdf 第1页内容，
+      保存到 page1.md。
+    workspace_files_from: ../pdf-reading/input
+    expectations:
+      - desc: page1.md exists
+        score: 3
+      - desc: 'page1.md 中包含研报标题"财务报表中的Alpha因子扩容与增强"'
+        score: 7
+
+  - id: page-count
+    description: "PDF 页数识别"
+    prompt: |
+      使用 pdf-reader skill 查看 input/financial_report_1.pdf 的元信息，
+      将页数写入 page_count.txt（只写数字）。
+    workspace_files_from: ../pdf-reading/input
+    expectations:
+      - desc: page_count.txt exists
+        score: 2
+      - desc: page_count.txt 中包含数字 42
+        score: 3
+
+  - id: perspectives
+    description: "page 1 多维度财务因子扩容的两个视角"
+    prompt: |
+      使用 pdf-reader skill 提取 input/financial_report_1.pdf 第1页内容，
+      保存到 page1.md。
+    workspace_files_from: ../pdf-reading/input
+    expectations:
+      - desc: page1.md exists
+        score: 2
+      - desc: 'page1.md 提到"多维度财务因子扩容"的两个视角："改进算子提升经典因子绩效"和"加入新数据带来增量信息"'
+        score: 3
+
+  - id: toc-parsing
+    description: "page 2 目录页解析"
+    prompt: |
+      使用 pdf-reader skill 提取 input/financial_report_1.pdf 第2页内容，
+      保存到 page2.md。
+    workspace_files_from: ../pdf-reading/input
+    expectations:
+      - desc: page2.md exists
+        score: 2
+      - desc: 'page2.md 是目录页，能看出"财务报表中Alpha信息的挖掘"在 page 5 附近，"Alpha因子库的扩容与增强"在 page 26 附近，"总结"在 page 39 附近'
+        score: 8
+
+  - id: figure-parsing
+    description: "page 3 图片/公式解析"
+    prompt: |
+      使用 pdf-reader skill 提取 input/financial_report_1.pdf 第3页内容，
+      保存到 page3.md。
+    workspace_files_from: ../pdf-reading/input
+    expectations:
+      - desc: page3.md exists
+        score: 2
+      - desc: 'page3.md 中包含"图1"或"EP和SUE因子计算拆解"的相关描述，能看到 EP = 净利润/总市值 的公式或等价表述'
+        score: 3
+
+  - id: table-parsing
+    description: "page 8 表格解析"
+    prompt: |
+      使用 pdf-reader skill 提取 input/financial_report_1.pdf 第8页内容，
+      保存到 page8.md。
+    workspace_files_from: ../pdf-reading/input
+    expectations:
+      - desc: page8.md exists
+        score: 2
+      - desc: 'page8.md 包含"表1：因子挖掘选用指标数量以及代表指标"的表格，有4列（数据来源、代表指标、选用指标数量、数据形式），包括表头共6行左右'
+        score: 20
+      - desc: '最后一行的"数据形式"列包含"历史累计"、"单季度"、"TTM"'
+        score: 8
+
+  - id: formula-parsing
+    description: "page 12 公式解析"
+    prompt: |
+      使用 pdf-reader skill 提取 input/financial_report_1.pdf 第12页内容，
+      保存到 page12.md。
+    workspace_files_from: ../pdf-reading/input
+    expectations:
+      - desc: page12.md exists
+        score: 2
+      - desc: 'page12.md 包含 EPRank 因子的公式，大意为 EPRank = Percentile(NetProfit) - Percentile(MV) 或等价表述'
+        score: 18

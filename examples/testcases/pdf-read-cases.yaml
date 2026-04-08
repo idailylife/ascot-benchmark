@@ -1,0 +1,29 @@
+name: pdf-reading-compact
+description: "PDF 阅读基准测试 - 紧凑格式"
+default_timeout_s: 300
+
+test_cases:
+  - id: parse-financial-report
+    description: "解析财务研报的各项内容"
+    prompt: |
+      使用 pdf-reader skill 解析 input/financial_report_1.pdf，
+      提取关键页面内容。
+    workspace_files_from: ../pdf-reading/input
+    expectations:
+      - desc: 解析到page 1的研报标题为"财务报表中的Alpha因子扩容与增强"
+        score: 10
+      - desc: pdf共有42页
+        score: 5
+      - desc: '解析到page 1的"多维度财务因子扩容"的两个视角: "改进算子提升经典因子绩效", "加入新数据带来增量信息"'
+        score: 5
+      - desc: 'page 2目录页正确解析: "财务报表中Alpha信息的挖掘"位于page 5, "Alpha因子库的扩容与增强"位于page 26, "总结"位于page 39'
+        score: 10
+      - desc: '图片解析. 解析第5页"图1：EP和SUE因子计算拆解". EP=净利润/总市值'
+        score: 5
+      - desc: |
+          表格解析. 解析第8页"表1：因子挖掘选用指标数量以及代表指标".
+          有"数据来源", "代表指标", "选用指标数量", "数据形式"共4列。 包括表头共6行.
+          最后一行的"数据形式"为"历史累计、单季度、TTM".
+        score: 30
+      - desc: 公式解析. page 14的EPRank 因子. EPRank = Percentile(NetProfit) - Percentile(MV)
+        score: 20
