@@ -75,7 +75,10 @@ def format_terminal(report: BenchmarkReport, *, show_cost: bool = False) -> str:
     if cases_with_phases:
         lines.append("")
         lines.append(" Phase Breakdown:")
-        lines.append(f"   {'Case':<22} {'Setup':>6} {'Agent':>7} {'Save':>6} {'Grade':>7} {'G.Cost':>8}")
+        header = f"   {'Case':<22} {'Setup':>6} {'Agent':>7} {'Save':>6} {'Grade':>7}"
+        if show_cost:
+            header += f" {'G.Cost':>8}"
+        lines.append(header)
         lines.append("   " + "-" * 58)
         for r in cases_with_phases:
             p = r.phases
@@ -83,10 +86,11 @@ def format_terminal(report: BenchmarkReport, *, show_cost: bool = False) -> str:
             ag_s = p.get("agent_run", {}).get("duration_s", 0)
             pres_s = p.get("workspace_preserve", {}).get("duration_s", 0)
             gr_s = p.get("grading", {}).get("duration_s", 0)
-            gr_cost = p.get("grading", {}).get("cost", 0)
-            lines.append(
-                f"   {r.case_id:<22} {ws_s:>5.1f}s {ag_s:>6.1f}s {pres_s:>5.1f}s {gr_s:>6.1f}s ${gr_cost:>7.4f}"
-            )
+            row = f"   {r.case_id:<22} {ws_s:>5.1f}s {ag_s:>6.1f}s {pres_s:>5.1f}s {gr_s:>6.1f}s"
+            if show_cost:
+                gr_cost = p.get("grading", {}).get("cost", 0)
+                row += f" ${gr_cost:>7.4f}"
+            lines.append(row)
 
     lines.append("=" * w)
     return "\n".join(lines)

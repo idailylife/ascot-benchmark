@@ -184,9 +184,11 @@ class BenchmarkRunner:
                 permission=self.permission,
                 extra_env=extra_env,
             )
+            events_path = self.store.case_dir(self.run_dir, tc.id) / "events.jsonl"
             t0 = time.monotonic()
             result = await self.client.async_run(
-                tc.prompt, str(ws), run_cfg=cfg, timeout_s=tc.timeout_s
+                tc.prompt, str(ws), run_cfg=cfg, timeout_s=tc.timeout_s,
+                log_file=events_path,
             )
             duration = time.monotonic() - t0
 
@@ -203,9 +205,6 @@ class BenchmarkRunner:
                     "cache_read": tu.cache_read, "cache_write": tu.cache_write,
                 }
             phases["agent_run"] = agent_stats
-
-            # Save raw events
-            self.store.save_events(self.run_dir, tc.id, result.events)
 
             # Preserve workspace output
             t_pres = time.monotonic()
