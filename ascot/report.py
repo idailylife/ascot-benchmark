@@ -70,6 +70,24 @@ def format_terminal(report: BenchmarkReport, *, show_cost: bool = False) -> str:
                     line += f" - {er.reasoning[:200]}"
                 lines.append(line)
 
+    # Phase breakdown
+    cases_with_phases = [r for r in report.results if r.phases]
+    if cases_with_phases:
+        lines.append("")
+        lines.append(" Phase Breakdown:")
+        lines.append(f"   {'Case':<22} {'Setup':>6} {'Agent':>7} {'Save':>6} {'Grade':>7} {'G.Cost':>8}")
+        lines.append("   " + "-" * 58)
+        for r in cases_with_phases:
+            p = r.phases
+            ws_s = p.get("workspace_setup", {}).get("duration_s", 0)
+            ag_s = p.get("agent_run", {}).get("duration_s", 0)
+            pres_s = p.get("workspace_preserve", {}).get("duration_s", 0)
+            gr_s = p.get("grading", {}).get("duration_s", 0)
+            gr_cost = p.get("grading", {}).get("cost", 0)
+            lines.append(
+                f"   {r.case_id:<22} {ws_s:>5.1f}s {ag_s:>6.1f}s {pres_s:>5.1f}s {gr_s:>6.1f}s ${gr_cost:>7.4f}"
+            )
+
     lines.append("=" * w)
     return "\n".join(lines)
 

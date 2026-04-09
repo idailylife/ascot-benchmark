@@ -73,9 +73,10 @@ class CaseResult:
     turns: int = 0
     duration_s: float = 0.0
     error: str | None = None
+    phases: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d = {
             "case_id": self.case_id,
             "score": self.score,
             "max_score": self.max_score,
@@ -88,6 +89,9 @@ class CaseResult:
             "duration_s": self.duration_s,
             "error": self.error,
         }
+        if self.phases:
+            d["phases"] = self.phases
+        return d
 
 
 @dataclass

@@ -29,13 +29,20 @@ JUDGE_PERMISSION: dict[str, str] = {
 }
 
 
-def _setup_judge_workspace(output_ws: Path) -> Path:
-    """Create an isolated workspace for the judge with output files copied in."""
+def _setup_judge_workspace(case_dir: Path) -> Path:
+    """Create an isolated workspace for the judge with case artifacts."""
     judge_ws = Path(tempfile.mkdtemp(prefix="ascot_judge_"))
-    shutil.copytree(
-        output_ws, judge_ws / "output",
-        ignore=shutil.ignore_patterns(".opencode"),
-    )
+
+    # Copy output files
+    ws_src = case_dir / "workspace"
+    if ws_src.is_dir():
+        shutil.copytree(ws_src, judge_ws / "output")
+
+    # Copy events log
+    events_src = case_dir / "events.jsonl"
+    if events_src.exists():
+        shutil.copy2(events_src, judge_ws / "events.jsonl")
+
     return judge_ws
 
 
@@ -56,21 +63,25 @@ def _list_workspace_files(ws: Path, max_files: int = 50) -> str:
 
 
 async def llm_judge(
-    ws: Path,
+    case_dir: Path,
     test_case: TestCase,
-    run_result: "RunResult",
     client: "AsyncOpenCodeClient",
-) -> list[ExpectationResult]:
-    """Run an OpenCode session to judge output against all expectations."""
+) -> tuple[list[ExpectationResult], dict]:
+    """Run an OpenCode session to judge output against all expectations.
+
+    Reads events.jsonl and workspace/ from case_dir to provide the judge
+    with the agent's full execution trace and output files.
+
+    Returns (expectation_results, judge_stats) where judge_stats contains
+    token usage, cost, and turns from the judge LLM session.
+    """
     from opencode_wrapper import RunConfig
 
-    judge_ws = _setup_judge_workspace(ws)
-    try:
-        file_listing = _list_workspace_files(judge_ws / "output")
-        final_text = _extract_text_from_result(run_result)
+    empty_stats: dict = {"tokens": {}, "cost": 0.0, "turns": 0}
 
-        if final_text:
-            (judge_ws / "agent_output.txt").write_text(final_text)
+    judge_ws = _setup_judge_workspace(case_dir)
+    try:
+        file_listing = _list_workspace_files(judge_ws / "output") if (judge_ws / "output").is_dir() else "(no files)"
 
         # Build numbered expectations list
         exp_lines = []
@@ -82,11 +93,13 @@ async def llm_judge(
             "You are a grading judge. Evaluate whether the agent's output "
             "meets EACH of the following expectations.\n",
             f"## Expectations\n{exp_list}\n",
+            "## Available Evidence\n"
+            "- `events.jsonl`: The agent's complete execution log (JSON lines). "
+            "Each line is an event showing the agent's reasoning, tool calls, "
+            "and outputs. Read this file to understand what the agent did.\n"
+            "- `output/`: Directory containing all files the agent produced. "
+            "Inspect these files to verify the agent's work.\n",
         ]
-
-        if final_text:
-            display_text = final_text if len(final_text) <= 4000 else final_text[:4000] + "\n... (truncated, full text in agent_output.txt)"
-            sections.append(f"## Agent Text Output\n{display_text}\n")
 
         if file_listing.strip() and file_listing.strip() != "(no files)":
             sections.append(
@@ -94,9 +107,10 @@ async def llm_judge(
             )
 
         sections.append(
-            "Evaluate based on ALL available evidence: the agent's text output "
-            "AND any files in output/. For binary files (xlsx, docx, etc.), "
-            "write and run Python scripts to parse and verify their contents.\n\n"
+            "Evaluate based on ALL available evidence: read events.jsonl to "
+            "understand the agent's execution, and inspect files in output/ to "
+            "verify results. For binary files (xlsx, docx, etc.), write and run "
+            "Python scripts to parse and verify their contents.\n\n"
             "Reply with ONLY a JSON object in this exact format:\n"
             "```json\n"
             "{\n"
@@ -115,7 +129,8 @@ async def llm_judge(
             prompt, str(judge_ws), run_cfg=cfg, timeout_s=300,
         )
         text = _extract_text_from_result(result)
-        return _parse_judge_response(text, test_case.expectations)
+        judge_stats = _extract_stats(result)
+        return _parse_judge_response(text, test_case.expectations), judge_stats
     except Exception as e:
         # On error, all expectations score 0
         return [
@@ -124,7 +139,7 @@ async def llm_judge(
                 reasoning=f"Judge error: {e}",
             )
             for exp in test_case.expectations
-        ]
+        ], empty_stats
     finally:
         shutil.rmtree(judge_ws, ignore_errors=True)
 
@@ -216,6 +231,24 @@ def _extract_text_from_result(run_result: "RunResult") -> str:
     return "\n".join(pieces) if pieces else ""
 
 
+def _extract_stats(run_result: "RunResult") -> dict:
+    """Extract token usage, cost, and turns from a RunResult."""
+    stats: dict = {"tokens": {}, "cost": 0.0, "turns": 0}
+    if hasattr(run_result, "token_usage"):
+        tu = run_result.token_usage
+        stats["tokens"] = {
+            "total": tu.total,
+            "input": tu.input,
+            "output": tu.output,
+            "reasoning": tu.reasoning,
+            "cache_read": tu.cache_read,
+            "cache_write": tu.cache_write,
+        }
+    stats["cost"] = run_result.total_cost
+    stats["turns"] = run_result.turns
+    return stats
+
+
 # ---------------------------------------------------------------------------
 # Combined grading
 # ---------------------------------------------------------------------------
@@ -223,18 +256,30 @@ def _extract_text_from_result(run_result: "RunResult") -> str:
 
 async def grade_case(
     test_case: TestCase,
-    ws: Path,
+    case_dir: Path,
     run_result: "RunResult",
     duration: float,
     client: "AsyncOpenCodeClient",
-) -> CaseResult:
-    """Grade a test case by running LLM judge on all expectations."""
+) -> tuple[CaseResult, dict]:
+    """Grade a test case by running LLM judge on all expectations.
+
+    Args:
+        case_dir: Path to the case output directory containing events.jsonl
+                  and workspace/.
+        run_result: Used only for extracting agent token/cost stats.
+
+    Returns (case_result, grading_stats) where grading_stats contains
+    token usage, cost, and turns from the judge session.
+    """
     expectation_results: list[ExpectationResult] = []
     score = 0
     max_score = 0
+    grading_stats: dict = {"tokens": {}, "cost": 0.0, "turns": 0}
 
     if test_case.expectations:
-        expectation_results = await llm_judge(ws, test_case, run_result, client)
+        expectation_results, grading_stats = await llm_judge(
+            case_dir, test_case, client,
+        )
         score = sum(er.earned for er in expectation_results)
         max_score = sum(er.score for er in expectation_results)
 
@@ -245,6 +290,9 @@ async def grade_case(
             "total": tu.total,
             "input": tu.input,
             "output": tu.output,
+            "reasoning": tu.reasoning,
+            "cache_read": tu.cache_read,
+            "cache_write": tu.cache_write,
         }
 
     return CaseResult(
@@ -258,7 +306,7 @@ async def grade_case(
         total_cost=run_result.total_cost,
         turns=run_result.turns,
         duration_s=duration,
-    )
+    ), grading_stats
 
 
 def error_result(case_id: str, error: Exception, test_case: TestCase | None = None) -> CaseResult:

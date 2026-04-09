@@ -160,8 +160,12 @@ class BenchmarkRunner:
     async def _run_single(self, tc: TestCase) -> CaseResult:
         log.info("Running case: %s", tc.id)
         self.store.save_eval(self.run_dir, tc.id, tc)
+        phases: dict[str, dict] = {}
 
+        t_ws = time.monotonic()
         ws = setup_workspace(self.suite_dir, tc, self.testcases_dir)
+        phases["workspace_setup"] = {"duration_s": round(time.monotonic() - t_ws, 3)}
+
         try:
             # If user provided a venv, inject it into PATH
             extra_env = None
@@ -186,15 +190,37 @@ class BenchmarkRunner:
             )
             duration = time.monotonic() - t0
 
+            agent_stats = {
+                "duration_s": round(duration, 3),
+                "turns": result.turns,
+                "cost": result.total_cost,
+            }
+            if hasattr(result, "token_usage"):
+                tu = result.token_usage
+                agent_stats["tokens"] = {
+                    "total": tu.total, "input": tu.input,
+                    "output": tu.output, "reasoning": tu.reasoning,
+                    "cache_read": tu.cache_read, "cache_write": tu.cache_write,
+                }
+            phases["agent_run"] = agent_stats
+
             # Save raw events
             self.store.save_events(self.run_dir, tc.id, result.events)
 
             # Preserve workspace output
+            t_pres = time.monotonic()
             ws_dest = self.store.case_dir(self.run_dir, tc.id) / "workspace"
             preserve_workspace(ws, ws_dest)
+            phases["workspace_preserve"] = {"duration_s": round(time.monotonic() - t_pres, 3)}
 
             # Grade
-            case_result = await grade_case(tc, ws, result, duration, self.client)
+            t_grade = time.monotonic()
+            case_dir = self.store.case_dir(self.run_dir, tc.id)
+            case_result, grading_stats = await grade_case(tc, case_dir, result, duration, self.client)
+            grading_stats["duration_s"] = round(time.monotonic() - t_grade, 3)
+            phases["grading"] = grading_stats
+
+            case_result.phases = phases
             self.store.save_result(self.run_dir, tc.id, case_result)
 
             log.info("Case %s: %d/%d (turns=%d, tokens=%d, %.1fs)",
@@ -206,6 +232,7 @@ class BenchmarkRunner:
         except OpenCodeError as e:
             log.error("Case %s error: %s", tc.id, e)
             cr = error_result(tc.id, e, tc)
+            cr.phases = phases
             self.store.save_result(self.run_dir, tc.id, cr)
             return cr
         finally:

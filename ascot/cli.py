@@ -47,6 +47,11 @@ def main(argv: list[str] | None = None) -> None:
     report_p.add_argument("--format", "-f", choices=["terminal", "json"], default="terminal")
     report_p.add_argument("--show-cost", action="store_true", help="Show cost in report")
 
+    # --- inspect ---
+    inspect_p = subparsers.add_parser("inspect", help="Analyze case execution events")
+    inspect_p.add_argument("case_dir", help="Path to case output directory")
+    inspect_p.add_argument("--format", "-f", choices=["terminal", "json"], default="terminal")
+
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -61,6 +66,8 @@ def main(argv: list[str] | None = None) -> None:
         asyncio.run(_cmd_grade(args))
     elif args.command == "report":
         _cmd_report(args)
+    elif args.command == "inspect":
+        _cmd_inspect(args)
 
 
 async def _cmd_run(args: argparse.Namespace) -> None:
@@ -170,7 +177,7 @@ async def _cmd_grade(args: argparse.Namespace) -> None:
         mock_result = RunResult()
         mock_result.exit_code = result_data.get("exit_code")
 
-        cr = await grade_case(tc, ws_path, mock_result,
+        cr, _grading_stats = await grade_case(tc, case_dir, mock_result,
                               result_data.get("duration_s", 0.0), client)
         # Preserve original metrics
         cr.turns = result_data.get("turns", 0)
@@ -248,3 +255,20 @@ def _cmd_report(args: argparse.Namespace) -> None:
         print(format_json(report))
     else:
         print(format_terminal(report, show_cost=show_cost))
+
+
+def _cmd_inspect(args: argparse.Namespace) -> None:
+    """Analyze case execution events for performance debugging."""
+    from .inspect import format_trace_json, format_trace_terminal, parse_events
+
+    case_dir = Path(args.case_dir).resolve()
+    if not (case_dir / "events.jsonl").exists():
+        print(f"No events.jsonl found in {case_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    trace = parse_events(case_dir)
+
+    if args.format == "json":
+        print(format_trace_json(trace))
+    else:
+        print(format_trace_terminal(trace))
