@@ -145,7 +145,11 @@ The LLM judge evaluates all expectations and assigns scores. Results are display
 
 ### Grading
 
-Ascot uses an LLM judge for grading. A separate OpenCode session evaluates the output against all `expectations`. The judge runs in its own isolated workspace with full permissions, so it can write and run scripts to inspect binary files (xlsx, docx, etc.). It also sees the agent's text output, useful for tasks like "read a PDF and summarize it".
+Ascot uses an LLM judge for grading. A separate OpenCode session evaluates the output against all `expectations`. The judge runs in its own isolated workspace with full permissions, so it can write and run scripts to inspect binary files (xlsx, docx, images, etc.).
+
+The judge receives two sources of evidence:
+- **`events.jsonl`**: The agent's complete execution log — every reasoning step, tool call, and output — so the judge can understand exactly what the agent did.
+- **`output/`**: All files the agent produced, for direct inspection.
 
 Grading is strictly outcome-based: if the agent did extensive work but didn't produce the expected result, the expectation scores 0.
 
@@ -187,6 +191,15 @@ python -m ascot report ./benchmark/run-001
 python -m ascot report ./benchmark/run-001 -f json --show-cost
 ```
 
+### `ascot inspect`
+
+Analyze a single case's execution for performance debugging. Shows per-step reasoning time, tool execution time, token usage, and cost:
+
+```bash
+python -m ascot inspect ./benchmark/run-001/create-report
+python -m ascot inspect ./benchmark/run-001/create-report -f json
+```
+
 ## Output Structure
 
 Each run produces:
@@ -198,12 +211,35 @@ benchmark/
     report.json            # Aggregated results
     create-report/
       eval.json            # Test case definition
-      result.json          # Scores, expectation results, metrics
+      result.json          # Scores, expectation results, metrics, phases
       events.jsonl         # Raw OpenCode event stream
       workspace/           # Preserved output files
         report.docx
     csv-to-xlsx/
       ...
+```
+
+### `result.json` Phases
+
+Each `result.json` includes a `phases` object with per-phase timing, token usage, and cost:
+
+```json
+{
+  "phases": {
+    "workspace_setup": {"duration_s": 0.006},
+    "agent_run": {
+      "duration_s": 23.6, "turns": 3, "cost": 0.05,
+      "tokens": {"total": 28954, "input": 7550, "output": 69,
+                 "reasoning": 87, "cache_read": 21248, "cache_write": 0}
+    },
+    "workspace_preserve": {"duration_s": 0.001},
+    "grading": {
+      "duration_s": 21.8, "turns": 2, "cost": 0.03,
+      "tokens": {"total": 19518, "input": 7450, "output": 63,
+                 "reasoning": 229, "cache_read": 11776, "cache_write": 0}
+    }
+  }
+}
 ```
 
 ## Report Example
@@ -225,7 +261,37 @@ benchmark/
    csv-to-xlsx (5/20):
      [PASS]   5pts  output.xlsx exists
      [FAIL]  15pts  output.xlsx contains all rows... - missing city column
+
+ Phase Breakdown:
+   Case                    Setup   Agent   Save   Grade   G.Cost
+   ----------------------------------------------------------
+   create-report            0.0s    8.2s   0.0s   12.4s $ 0.0000
+   summarize-pdf            0.0s    6.1s   0.0s   10.8s $ 0.0000
+   csv-to-xlsx              0.0s   12.1s   0.0s   14.2s $ 0.0000
 ======================================================================
+```
+
+## Inspect Example
+
+```
+===========================================================================
+ Ascot Inspect: csv-to-xlsx
+===========================================================================
+ Steps (5 total, 12.1s):
+
+   Step  Reasoning  Tool         Tool Time    Tokens    Cost  Status
+   ------------------------------------------------------------------------
+      1       3.9s  read              18ms     9,588    0.00  completed
+      2      942ms  glob              24ms     9,652    0.00  completed
+      3       2.2s  read              42ms     9,806    0.00  completed
+      4       2.6s  write             15ms     9,941    0.00  completed
+      5       74ms  (none)               -    10,007    0.00  stop
+   ------------------------------------------------------------------------
+
+ Summary:
+   Reasoning: 9.7s (80%)   Tool exec: 99ms (1%)
+   Input: 8,013   Output: 143   Reasoning: 134   Cache read: 40,704
+===========================================================================
 ```
 
 ## Permissions

@@ -35,6 +35,7 @@ test_cases:
 | `workspace_files_from` | no | Directory copied into workspace (supports binary) |
 | `timeout_s` | no | Timeout in seconds (default: 120) |
 | `model` | no | Model override |
+| `agent` | no | Agent override |
 | `tags` | no | Tags for `--tag` filtering |
 
 ## Expectations
