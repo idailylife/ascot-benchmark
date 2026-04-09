@@ -51,6 +51,7 @@ def main(argv: list[str] | None = None) -> None:
     inspect_p = subparsers.add_parser("inspect", help="Analyze case execution events")
     inspect_p.add_argument("case_dir", help="Path to case output directory")
     inspect_p.add_argument("--format", "-f", choices=["terminal", "json"], default="terminal")
+    inspect_p.add_argument("--show-cost", action="store_true", help="Show cost in report")
 
     args = parser.parse_args(argv)
 
@@ -271,4 +272,4 @@ def _cmd_inspect(args: argparse.Namespace) -> None:
     if args.format == "json":
         print(format_trace_json(trace))
     else:
-        print(format_trace_terminal(trace))
+        print(format_trace_terminal(trace, show_cost=args.show_cost))

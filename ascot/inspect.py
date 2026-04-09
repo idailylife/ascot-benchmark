@@ -15,6 +15,7 @@ class StepTrace:
     step: int
     reasoning_ms: int = 0
     tool_name: str | None = None
+    tool_detail: str | None = None
     tool_call_id: str | None = None
     tool_time_ms: int = 0
     tool_status: str | None = None
@@ -32,6 +33,34 @@ class CaseTrace:
     total_duration_ms: int = 0
     total_tokens: dict[str, Any] = field(default_factory=dict)
     total_cost: float = 0.0
+
+
+def _tool_detail(tool_name: str | None, state: dict[str, Any]) -> str | None:
+    """Extract a brief detail string from the tool's input/output."""
+    if not tool_name:
+        return None
+    inp = state.get("input", {})
+    if not isinstance(inp, dict):
+        return None
+
+    if tool_name in ("read", "write"):
+        fp = inp.get("filePath") or inp.get("file_path") or ""
+        if fp:
+            return Path(fp).name
+    elif tool_name == "edit":
+        fp = inp.get("filePath") or inp.get("file_path") or ""
+        if fp:
+            return Path(fp).name
+    elif tool_name in ("glob", "grep"):
+        return inp.get("pattern")
+    elif tool_name == "bash":
+        cmd = inp.get("command") or ""
+        # Show first 60 chars of command
+        return cmd[:60] + ("..." if len(cmd) > 60 else "") if cmd else None
+    elif tool_name == "skill":
+        return inp.get("skill") or inp.get("name")
+
+    return None
 
 
 def parse_events(case_dir: Path) -> CaseTrace:
@@ -56,6 +85,7 @@ def parse_events(case_dir: Path) -> CaseTrace:
 
     # Pending tool data for current step
     cur_tool_name: str | None = None
+    cur_tool_detail: str | None = None
     cur_tool_call_id: str | None = None
     cur_tool_time_ms: int = 0
     cur_tool_status: str | None = None
@@ -74,6 +104,7 @@ def parse_events(case_dir: Path) -> CaseTrace:
             step_num += 1
             step_start_ts = ts
             cur_tool_name = None
+            cur_tool_detail = None
             cur_tool_call_id = None
             cur_tool_time_ms = 0
             cur_tool_status = None
@@ -87,6 +118,7 @@ def parse_events(case_dir: Path) -> CaseTrace:
             cur_tool_name = part.get("tool")
             cur_tool_call_id = part.get("callID")
             cur_tool_status = state.get("status")
+            cur_tool_detail = _tool_detail(cur_tool_name, state)
             cur_tool_start_ts = time_info.get("start")
             tool_end = time_info.get("end")
             if cur_tool_start_ts and tool_end:
@@ -110,6 +142,7 @@ def parse_events(case_dir: Path) -> CaseTrace:
                 step=step_num,
                 reasoning_ms=max(0, reasoning_ms),
                 tool_name=cur_tool_name,
+                tool_detail=cur_tool_detail,
                 tool_call_id=cur_tool_call_id,
                 tool_time_ms=cur_tool_time_ms,
                 tool_status=cur_tool_status if cur_tool_name else reason,
@@ -148,10 +181,10 @@ def _fmt_ms(ms: int) -> str:
     return f"{ms / 1000:.1f}s"
 
 
-def format_trace_terminal(trace: CaseTrace) -> str:
+def format_trace_terminal(trace: CaseTrace, *, show_cost: bool = False) -> str:
     """Format a CaseTrace for terminal display."""
     lines: list[str] = []
-    w = 75
+    w = 100
 
     lines.append("=" * w)
     lines.append(f" Ascot Inspect: {trace.case_id}")
@@ -161,7 +194,10 @@ def format_trace_terminal(trace: CaseTrace) -> str:
     lines.append(f" Steps ({len(trace.steps)} total, {total_s:.1f}s):")
     lines.append("")
 
-    header = f"   {'Step':>4}  {'Reasoning':>9}  {'Tool':<12} {'Tool Time':>9}  {'Tokens':>8}  {'Cost':>6}  {'Status'}"
+    header = f"   {'Step':>4}  {'Reasoning':>9}  {'Tool':<12} {'Detail':<24} {'Tool Time':>9}  {'Tokens':>8}"
+    if show_cost:
+        header += f"  {'Cost':>6}"
+    header += f"  {'Status'}"
     lines.append(header)
     lines.append("   " + "-" * (w - 3))
 
@@ -173,13 +209,18 @@ def format_trace_terminal(trace: CaseTrace) -> str:
         total_tool_ms += s.tool_time_ms
 
         tool_name = s.tool_name or "(none)"
+        detail = s.tool_detail or ""
+        if len(detail) > 24:
+            detail = detail[:21] + "..."
         tool_time = _fmt_ms(s.tool_time_ms) if s.tool_name else "-"
         tokens = s.tokens.get("total", 0)
         status = s.tool_status or ""
 
-        lines.append(
-            f"   {s.step:>4}  {_fmt_ms(s.reasoning_ms):>9}  {tool_name:<12} {tool_time:>9}  {tokens:>8,}  {s.cost:>6.2f}  {status}"
-        )
+        row = f"   {s.step:>4}  {_fmt_ms(s.reasoning_ms):>9}  {tool_name:<12} {detail:<24} {tool_time:>9}  {tokens:>8,}"
+        if show_cost:
+            row += f"  {s.cost:>6.2f}"
+        row += f"  {status}"
+        lines.append(row)
 
     lines.append("   " + "-" * (w - 3))
 
@@ -204,7 +245,7 @@ def format_trace_terminal(trace: CaseTrace) -> str:
         f"   Cache read: {cache.get('read', 0):,}"
     )
 
-    if trace.total_cost > 0:
+    if show_cost and trace.total_cost > 0:
         lines.append(f"   Total cost: ${trace.total_cost:.4f}")
 
     lines.append("=" * w)
