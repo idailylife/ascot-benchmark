@@ -28,13 +28,13 @@ def main(argv: list[str] | None = None) -> None:
     run_p.add_argument("testcases", help="Path to test cases YAML file or directory")
     run_p.add_argument("--output", "-o", default="./benchmark", help="Output directory")
     run_p.add_argument("--model", "-m", help="Override model for all cases")
-    run_p.add_argument("--concurrency", "-c", type=int, default=2, help="Parallel case limit")
+    run_p.add_argument("--concurrency", "-c", type=int, default=4, help="Parallel case limit")
     run_p.add_argument("--timeout", "-t", type=float, help="Override per-case timeout (seconds)")
     run_p.add_argument("--binary", default="opencode", help="OpenCode binary path")
     run_p.add_argument("--tag", action="append", help="Only run cases with this tag")
     run_p.add_argument("--show-cost", action="store_true", help="Show cost in report")
     run_p.add_argument("--venv", help="Path to pre-configured virtual environment")
-    run_p.add_argument("--trials", "-n", type=int, default=1, help="Number of times to run each test case (default: 1)")
+    run_p.add_argument("--trials", "-n", type=int, default=3, help="Number of times to run each test case (default: 3)")
     run_p.add_argument("--format", "-f", choices=["terminal", "json"], default="terminal")
 
     # --- grade ---

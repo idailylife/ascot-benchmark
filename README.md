@@ -175,9 +175,9 @@ python -m ascot run <suite_dir> <testcases> [options]
 |---|---|---|
 | `-o, --output` | `./benchmark` | Output directory for results |
 | `-m, --model` | suite default | Override model for all cases |
-| `-c, --concurrency` | 2 | Max parallel cases |
+| `-c, --concurrency` | 4 | Max parallel cases |
 | `-t, --timeout` | per-case | Override timeout for all cases (seconds) |
-| `-n, --trials` | 1 | Number of times to run each test case |
+| `-n, --trials` | 3 | Number of times to run each test case |
 | `--binary` | `opencode` | Path to OpenCode binary |
 | `--venv` | none | Path to pre-configured virtual environment |
 | `--tag` | all | Only run cases matching tag (repeatable) |
