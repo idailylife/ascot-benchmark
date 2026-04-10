@@ -43,7 +43,7 @@ def _parse_test_case(raw: dict[str, Any], defaults: dict[str, Any]) -> TestCase:
         prompt=raw["prompt"],
         expectations=expectations,
         description=raw.get("description", ""),
-        workspace_files_from=raw.get("workspace_files_from"),
+        workspace_files_from=raw.get("workspace_files_from", defaults.get("default_workspace_files_from")),
         timeout_s=raw.get("timeout_s", defaults.get("default_timeout_s", 120.0)),
         model=raw.get("model", defaults.get("default_model")),
         agent=raw.get("agent"),
@@ -93,6 +93,7 @@ def _build_suite(data: dict[str, Any]) -> TestSuite:
     defaults = {
         "default_timeout_s": data.get("default_timeout_s", 120.0),
         "default_model": data.get("default_model"),
+        "default_workspace_files_from": data.get("default_workspace_files_from"),
     }
     cases = [_parse_test_case(dict(tc), defaults) for tc in data.get("test_cases", [])]
     return TestSuite(
@@ -101,4 +102,5 @@ def _build_suite(data: dict[str, Any]) -> TestSuite:
         description=data.get("description", ""),
         default_timeout_s=defaults["default_timeout_s"],
         default_model=defaults["default_model"],
+        default_workspace_files_from=defaults["default_workspace_files_from"],
     )

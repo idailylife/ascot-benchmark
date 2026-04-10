@@ -56,6 +56,7 @@ class TestSuite:
     description: str = ""
     default_timeout_s: float = 120.0
     default_model: str | None = None
+    default_workspace_files_from: str | None = None
 
 
 @dataclass

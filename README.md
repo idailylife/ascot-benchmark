@@ -91,6 +91,7 @@ name: doc-generation
 description: "Document generation suite benchmark"
 default_timeout_s: 180
 default_model: anthropic/claude-sonnet-4-20250514
+default_workspace_files_from: fixtures/shared  # optional, inherited by all cases
 
 test_cases:
   - id: create-report
@@ -132,7 +133,7 @@ test_cases:
 | `id` | yes | Unique identifier |
 | `prompt` | yes | Prompt sent to OpenCode |
 | `expectations` | no | List of `{desc, score}` items evaluated by LLM judge |
-| `workspace_files_from` | no | Directory of files to copy into workspace (supports binary) |
+| `workspace_files_from` | no | Directory of files to copy into workspace (supports binary); inherits from suite-level `default_workspace_files_from` if not set |
 | `timeout_s` | no | Per-case timeout in seconds (default: 120) |
 | `model` | no | Model override for this case |
 | `agent` | no | Agent override for this case |

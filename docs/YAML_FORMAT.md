@@ -7,6 +7,7 @@ name: <suite-name>
 description: "<description>"
 default_timeout_s: 300
 default_model: null          # optional model override
+default_workspace_files_from: null  # optional, inherited by all cases
 
 test_cases:
   - id: <kebab-case-id>
@@ -32,7 +33,7 @@ test_cases:
 | `id` | yes | Unique kebab-case identifier |
 | `prompt` | yes | Instruction sent to the agent |
 | `expectations` | no | List of `{desc, score}` items evaluated by LLM judge |
-| `workspace_files_from` | no | Directory copied into workspace (supports binary) |
+| `workspace_files_from` | no | Directory copied into workspace (supports binary); inherits from suite-level `default_workspace_files_from` if not set |
 | `timeout_s` | no | Timeout in seconds (default: 120) |
 | `model` | no | Model override |
 | `agent` | no | Agent override |
@@ -60,6 +61,7 @@ Converted output:
 name: pdf-reading
 description: "PDF reading benchmark"
 default_timeout_s: 300
+default_workspace_files_from: ../pdf-reading/input
 
 test_cases:
   - id: title-extraction
@@ -67,7 +69,6 @@ test_cases:
     prompt: |
       Use the pdf-reader skill to extract page 1 of input/report.pdf,
       save to page1.md.
-    workspace_files_from: ../pdf-reading/input
     expectations:
       - desc: page1.md exists
         score: 3
@@ -79,7 +80,6 @@ test_cases:
     prompt: |
       Use the pdf-reader skill to check input/report.pdf metadata,
       write the page count to page_count.txt (number only).
-    workspace_files_from: ../pdf-reading/input
     expectations:
       - desc: page_count.txt exists
         score: 2
@@ -91,7 +91,6 @@ test_cases:
     prompt: |
       Use the pdf-reader skill to extract the table from input/report.pdf,
       save to table.md.
-    workspace_files_from: ../pdf-reading/input
     expectations:
       - desc: table.md exists
         score: 2
