@@ -1,3 +1,5 @@
 """Ascot – benchmark framework for evaluating OpenCode suites."""
 
-__version__ = "0.4.0"
+from importlib.metadata import version as _v
+
+__version__ = _v("ascot")
