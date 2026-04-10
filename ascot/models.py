@@ -136,23 +136,28 @@ class BenchmarkReport:
 def aggregate_trials(case_id: str, trials: list[CaseResult]) -> CaseResult:
     """Aggregate multiple trial results into a single CaseResult using averaging."""
     n = len(trials)
-    max_score = trials[0].max_score
+    max_score = max(t.max_score for t in trials)
 
     avg_score = round(sum(t.score for t in trials) / n)
 
     # Per-expectation averaging
-    num_expectations = len(trials[0].expectation_results)
+    # Find a trial with expectation results as reference (timed-out trials may have none)
+    ref = next((t for t in trials if t.expectation_results), None)
     avg_exp_results = []
-    for i in range(num_expectations):
-        exp = trials[0].expectation_results[i]
-        pass_count = sum(1 for t in trials if t.expectation_results[i].earned > 0)
-        earned = round(exp.score * pass_count / n)
-        avg_exp_results.append(ExpectationResult(
-            desc=exp.desc,
-            score=exp.score,
-            earned=earned,
-            reasoning=f"Passed {pass_count}/{n} trials",
-        ))
+    if ref:
+        for i in range(len(ref.expectation_results)):
+            exp = ref.expectation_results[i]
+            pass_count = sum(
+                1 for t in trials
+                if len(t.expectation_results) > i and t.expectation_results[i].earned > 0
+            )
+            earned = round(exp.score * pass_count / n)
+            avg_exp_results.append(ExpectationResult(
+                desc=exp.desc,
+                score=exp.score,
+                earned=earned,
+                reasoning=f"Passed {pass_count}/{n} trials",
+            ))
 
     # Token usage: sum across trials
     all_keys = set()
