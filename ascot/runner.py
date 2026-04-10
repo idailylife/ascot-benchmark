@@ -16,7 +16,7 @@ from opencode_wrapper import (
 )
 
 from .graders import error_result, grade_case
-from .models import BenchmarkReport, CaseResult, TestCase, TestSuite
+from .models import BenchmarkReport, CaseResult, TestCase, TestSuite, aggregate_trials
 from .store import RunStore
 from .workspace import cleanup_workspace, preserve_workspace, setup_workspace
 
@@ -111,6 +111,7 @@ class BenchmarkRunner:
         binary: str = "opencode",
         testcases_dir: Path | None = None,
         venv: Path | None = None,
+        trials: int = 1,
     ):
         self.suite_dir = suite_dir
         self.test_suite = test_suite
@@ -120,6 +121,7 @@ class BenchmarkRunner:
         self.concurrency = concurrency
         self.permission = build_permission(suite_dir)
         self.venv = venv
+        self.trials = trials
 
         self.client = AsyncOpenCodeClient(
             binary=binary,
@@ -131,7 +133,7 @@ class BenchmarkRunner:
         self.store = RunStore(output_dir)
 
     async def run_all(self) -> BenchmarkReport:
-        """Run all test cases and return a BenchmarkReport."""
+        """Run all test cases (with trials) and return a BenchmarkReport."""
         run_id, run_dir = self.store.next_run_dir()
         self.run_dir = run_dir
 
@@ -139,26 +141,44 @@ class BenchmarkRunner:
             "suite_name": self.test_suite.name,
             "model": self.model,
             "concurrency": self.concurrency,
+            "trials": self.trials,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "total_cases": len(self.test_suite.test_cases),
         })
 
-        tasks = [
-            asyncio.create_task(self._run_guarded(tc))
-            for tc in self.test_suite.test_cases
-        ]
-        results = await asyncio.gather(*tasks)
+        # Create one task per (case, trial) pair
+        tasks = []
+        for tc in self.test_suite.test_cases:
+            for trial_num in range(1, self.trials + 1):
+                tasks.append(
+                    asyncio.create_task(self._run_guarded(tc, trial_num))
+                )
+        trial_results = await asyncio.gather(*tasks)
+
+        # Group by case_id and aggregate
+        from collections import defaultdict
+        by_case: dict[str, list[CaseResult]] = defaultdict(list)
+        for tr in trial_results:
+            by_case[tr.case_id].append(tr)
+
+        results = []
+        for tc in self.test_suite.test_cases:
+            trials = by_case[tc.id]
+            agg = aggregate_trials(tc.id, trials)
+            self.store.save_result(self.run_dir, tc.id, agg)
+            results.append(agg)
 
         report = build_report(self.test_suite.name, run_id, results)
+        report.num_trials = self.trials
         self.store.save_report(run_dir, report)
         return report
 
-    async def _run_guarded(self, tc: TestCase) -> CaseResult:
+    async def _run_guarded(self, tc: TestCase, trial_num: int) -> CaseResult:
         async with self.sem:
-            return await self._run_single(tc)
+            return await self._run_single(tc, trial_num)
 
-    async def _run_single(self, tc: TestCase) -> CaseResult:
-        log.info("Running case: %s", tc.id)
+    async def _run_single(self, tc: TestCase, trial_num: int) -> CaseResult:
+        log.info("Running case: %s (trial %d/%d)", tc.id, trial_num, self.trials)
         self.store.save_eval(self.run_dir, tc.id, tc)
         phases: dict[str, dict] = {}
 
@@ -184,7 +204,8 @@ class BenchmarkRunner:
                 permission=self.permission,
                 extra_env=extra_env,
             )
-            events_path = self.store.case_dir(self.run_dir, tc.id) / "events.jsonl"
+            trial_d = self.store.trial_dir(self.run_dir, tc.id, trial_num)
+            events_path = trial_d / "events.jsonl"
             t0 = time.monotonic()
             result = await self.client.async_run(
                 tc.prompt, str(ws), run_cfg=cfg, timeout_s=tc.timeout_s,
@@ -208,31 +229,30 @@ class BenchmarkRunner:
 
             # Preserve workspace output
             t_pres = time.monotonic()
-            ws_dest = self.store.case_dir(self.run_dir, tc.id) / "workspace"
+            ws_dest = trial_d / "workspace"
             preserve_workspace(ws, ws_dest)
             phases["workspace_preserve"] = {"duration_s": round(time.monotonic() - t_pres, 3)}
 
             # Grade
             t_grade = time.monotonic()
-            case_dir = self.store.case_dir(self.run_dir, tc.id)
-            case_result, grading_stats = await grade_case(tc, case_dir, result, duration, self.client)
+            case_result, grading_stats = await grade_case(tc, trial_d, result, duration, self.client)
             grading_stats["duration_s"] = round(time.monotonic() - t_grade, 3)
             phases["grading"] = grading_stats
 
             case_result.phases = phases
-            self.store.save_result(self.run_dir, tc.id, case_result)
+            self.store.save_trial_result(self.run_dir, tc.id, trial_num, case_result)
 
-            log.info("Case %s: %d/%d (turns=%d, tokens=%d, %.1fs)",
-                     tc.id, case_result.score, case_result.max_score,
+            log.info("Case %s trial %d: %d/%d (turns=%d, tokens=%d, %.1fs)",
+                     tc.id, trial_num, case_result.score, case_result.max_score,
                      case_result.turns,
                      case_result.token_usage.get("total", 0), duration)
             return case_result
 
         except OpenCodeError as e:
-            log.error("Case %s error: %s", tc.id, e)
+            log.error("Case %s trial %d error: %s", tc.id, trial_num, e)
             cr = error_result(tc.id, e, tc)
             cr.phases = phases
-            self.store.save_result(self.run_dir, tc.id, cr)
+            self.store.save_trial_result(self.run_dir, tc.id, trial_num, cr)
             return cr
         finally:
             cleanup_workspace(ws)

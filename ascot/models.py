@@ -74,6 +74,8 @@ class CaseResult:
     duration_s: float = 0.0
     error: str | None = None
     phases: dict[str, dict[str, Any]] = field(default_factory=dict)
+    trial_results: list["CaseResult"] = field(default_factory=list)
+    num_trials: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         d = {
@@ -88,6 +90,8 @@ class CaseResult:
             "turns": self.turns,
             "duration_s": self.duration_s,
             "error": self.error,
+            "num_trials": self.num_trials,
+            "trial_results": [tr.to_dict() for tr in self.trial_results],
         }
         if self.phases:
             d["phases"] = self.phases
@@ -109,6 +113,7 @@ class BenchmarkReport:
     total_tokens: int = 0
     total_duration_s: float = 0.0
     total_cost: float = 0.0
+    num_trials: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -123,4 +128,46 @@ class BenchmarkReport:
             "total_tokens": self.total_tokens,
             "total_duration_s": self.total_duration_s,
             "total_cost": self.total_cost,
+            "num_trials": self.num_trials,
         }
+
+
+def aggregate_trials(case_id: str, trials: list[CaseResult]) -> CaseResult:
+    """Aggregate multiple trial results into a single CaseResult using averaging."""
+    n = len(trials)
+    max_score = trials[0].max_score
+
+    avg_score = round(sum(t.score for t in trials) / n)
+
+    # Per-expectation averaging
+    num_expectations = len(trials[0].expectation_results)
+    avg_exp_results = []
+    for i in range(num_expectations):
+        exp = trials[0].expectation_results[i]
+        pass_count = sum(1 for t in trials if t.expectation_results[i].earned > 0)
+        earned = round(exp.score * pass_count / n)
+        avg_exp_results.append(ExpectationResult(
+            desc=exp.desc,
+            score=exp.score,
+            earned=earned,
+            reasoning=f"Passed {pass_count}/{n} trials",
+        ))
+
+    # Token usage: sum across trials
+    all_keys = set()
+    for t in trials:
+        all_keys.update(t.token_usage.keys())
+    agg_tokens = {k: sum(t.token_usage.get(k, 0) for t in trials) for k in all_keys}
+
+    return CaseResult(
+        case_id=case_id,
+        score=avg_score,
+        max_score=max_score,
+        expectation_results=avg_exp_results,
+        token_usage=agg_tokens,
+        total_cost=sum(t.total_cost for t in trials),
+        turns=round(sum(t.turns for t in trials) / n),
+        duration_s=sum(t.duration_s for t in trials),
+        trial_results=trials,
+        num_trials=n,
+    )

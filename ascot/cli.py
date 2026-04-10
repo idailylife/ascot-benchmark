@@ -34,6 +34,7 @@ def main(argv: list[str] | None = None) -> None:
     run_p.add_argument("--tag", action="append", help="Only run cases with this tag")
     run_p.add_argument("--show-cost", action="store_true", help="Show cost in report")
     run_p.add_argument("--venv", help="Path to pre-configured virtual environment")
+    run_p.add_argument("--trials", "-n", type=int, default=1, help="Number of times to run each test case (default: 1)")
     run_p.add_argument("--format", "-f", choices=["terminal", "json"], default="terminal")
 
     # --- grade ---
@@ -113,9 +114,11 @@ async def _cmd_run(args: argparse.Namespace) -> None:
         binary=args.binary,
         testcases_dir=testcases_dir,
         venv=venv_path,
+        trials=args.trials,
     )
 
-    print(f"Running {len(test_suite.test_cases)} test case(s) from suite '{test_suite.name}'...")
+    trial_info = f" x {args.trials} trials" if args.trials > 1 else ""
+    print(f"Running {len(test_suite.test_cases)} test case(s){trial_info} from suite '{test_suite.name}'...")
     report = await runner.run_all()
 
     if args.format == "json":
@@ -126,10 +129,10 @@ async def _cmd_run(args: argparse.Namespace) -> None:
 
 async def _cmd_grade(args: argparse.Namespace) -> None:
     """Re-grade an existing run using LLM judge."""
-    from opencode_wrapper import AsyncOpenCodeClient
+    from opencode_wrapper import AsyncOpenCodeClient, RunResult
 
     from .graders import grade_case
-    from .models import CaseResult, Expectation
+    from .models import CaseResult, Expectation, TestCase, aggregate_trials
     from .report import format_terminal
     from .runner import build_report
     from .store import RunStore, _write_json
@@ -143,26 +146,23 @@ async def _cmd_grade(args: argparse.Namespace) -> None:
     with open(meta_path) as f:
         meta = json.load(f)
 
+    num_trials = meta.get("trials", 1)
+
     client = AsyncOpenCodeClient(
         binary=args.binary, isolate_db=True,
         startup_concurrency=1, startup_delay_s=0.3,
     )
 
-    # Re-grade each case that has a workspace and eval.json
+    # Re-grade each case
     results: list[CaseResult] = []
     for case_dir in sorted(run_dir.iterdir()):
         eval_path = case_dir / "eval.json"
-        ws_path = case_dir / "workspace"
-        result_path = case_dir / "result.json"
-        if not eval_path.exists() or not ws_path.exists():
+        if not eval_path.exists():
             continue
 
         with open(eval_path) as f:
             eval_data = json.load(f)
-        with open(result_path) as f:
-            result_data = json.load(f)
 
-        from .models import TestCase
         expectations = [
             Expectation(desc=e["desc"], score=e.get("score", 1))
             for e in eval_data.get("expectations", [])
@@ -173,25 +173,67 @@ async def _cmd_grade(args: argparse.Namespace) -> None:
             expectations=expectations,
         )
 
-        # Create a mock RunResult-like object for grading
-        from opencode_wrapper import RunResult
-        mock_result = RunResult()
-        mock_result.exit_code = result_data.get("exit_code")
+        # Find trial directories
+        trial_dirs = sorted(case_dir.glob("trial-*"))
+        if trial_dirs:
+            trial_results = []
+            for td in trial_dirs:
+                ws_path = td / "workspace"
+                result_path = td / "result.json"
+                if not ws_path.exists():
+                    continue
 
-        cr, _grading_stats = await grade_case(tc, case_dir, mock_result,
-                              result_data.get("duration_s", 0.0), client)
-        # Preserve original metrics
-        cr.turns = result_data.get("turns", 0)
-        cr.token_usage = result_data.get("token_usage", {})
-        cr.total_cost = result_data.get("total_cost", 0.0)
-        cr.duration_s = result_data.get("duration_s", 0.0)
-        results.append(cr)
+                with open(result_path) as f:
+                    result_data = json.load(f)
 
-        # Overwrite result.json
-        _write_json(result_path, cr.to_dict())
+                mock_result = RunResult()
+                mock_result.exit_code = result_data.get("exit_code")
+
+                cr, _grading_stats = await grade_case(
+                    tc, td, mock_result,
+                    result_data.get("duration_s", 0.0), client,
+                )
+                # Preserve original metrics
+                cr.turns = result_data.get("turns", 0)
+                cr.token_usage = result_data.get("token_usage", {})
+                cr.total_cost = result_data.get("total_cost", 0.0)
+                cr.duration_s = result_data.get("duration_s", 0.0)
+                trial_results.append(cr)
+
+                _write_json(td / "result.json", cr.to_dict())
+
+            if trial_results:
+                agg = aggregate_trials(tc.id, trial_results)
+                results.append(agg)
+                _write_json(case_dir / "result.json", agg.to_dict())
+        else:
+            # Legacy: no trial subdirectories
+            ws_path = case_dir / "workspace"
+            result_path = case_dir / "result.json"
+            if not ws_path.exists():
+                continue
+
+            with open(result_path) as f:
+                result_data = json.load(f)
+
+            mock_result = RunResult()
+            mock_result.exit_code = result_data.get("exit_code")
+
+            cr, _grading_stats = await grade_case(
+                tc, case_dir, mock_result,
+                result_data.get("duration_s", 0.0), client,
+            )
+            cr.turns = result_data.get("turns", 0)
+            cr.token_usage = result_data.get("token_usage", {})
+            cr.total_cost = result_data.get("total_cost", 0.0)
+            cr.duration_s = result_data.get("duration_s", 0.0)
+            results.append(cr)
+
+            _write_json(result_path, cr.to_dict())
 
     run_id = run_dir.name
     report = build_report(meta.get("suite_name", "unknown"), run_id, results)
+    report.num_trials = num_trials
 
     _write_json(run_dir / "report.json", report.to_dict())
 
@@ -214,26 +256,7 @@ def _cmd_report(args: argparse.Namespace) -> None:
     # Reconstruct report from JSON
     results = []
     for r in data.get("results", []):
-        expectation_results = [
-            ExpectationResult(
-                desc=er["desc"],
-                score=er["score"],
-                earned=er["earned"],
-                reasoning=er.get("reasoning", ""),
-            )
-            for er in r.get("expectation_results", [])
-        ]
-        results.append(CaseResult(
-            case_id=r["case_id"],
-            score=r.get("score", 0),
-            max_score=r.get("max_score", 0),
-            expectation_results=expectation_results,
-            token_usage=r.get("token_usage", {}),
-            total_cost=r.get("total_cost", 0.0),
-            turns=r.get("turns", 0),
-            duration_s=r.get("duration_s", 0.0),
-            error=r.get("error"),
-        ))
+        results.append(_reconstruct_case_result(r))
 
     report = BenchmarkReport(
         suite_name=data["suite_name"],
@@ -247,6 +270,7 @@ def _cmd_report(args: argparse.Namespace) -> None:
         total_tokens=data.get("total_tokens", 0),
         total_duration_s=data.get("total_duration_s", 0.0),
         total_cost=data.get("total_cost", 0.0),
+        num_trials=data.get("num_trials", 1),
     )
 
     from .report import format_json, format_terminal
@@ -256,6 +280,38 @@ def _cmd_report(args: argparse.Namespace) -> None:
         print(format_json(report))
     else:
         print(format_terminal(report, show_cost=show_cost))
+
+
+def _reconstruct_case_result(r: dict) -> "CaseResult":
+    """Reconstruct a CaseResult from a JSON dict."""
+    from .models import CaseResult, ExpectationResult
+
+    expectation_results = [
+        ExpectationResult(
+            desc=er["desc"],
+            score=er["score"],
+            earned=er["earned"],
+            reasoning=er.get("reasoning", ""),
+        )
+        for er in r.get("expectation_results", [])
+    ]
+    trial_results = [
+        _reconstruct_case_result(tr)
+        for tr in r.get("trial_results", [])
+    ]
+    return CaseResult(
+        case_id=r["case_id"],
+        score=r.get("score", 0),
+        max_score=r.get("max_score", 0),
+        expectation_results=expectation_results,
+        token_usage=r.get("token_usage", {}),
+        total_cost=r.get("total_cost", 0.0),
+        turns=r.get("turns", 0),
+        duration_s=r.get("duration_s", 0.0),
+        error=r.get("error"),
+        num_trials=r.get("num_trials", 1),
+        trial_results=trial_results,
+    )
 
 
 def _cmd_inspect(args: argparse.Namespace) -> None:

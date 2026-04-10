@@ -25,6 +25,16 @@ This will:
 4. Grade results: LLM judge evaluates each expectation and assigns scores
 5. Print a report with scores, turns, tokens, and duration
 
+### Multi-Trial Runs
+
+LLM outputs can vary between runs. Use `--trials` to run each case multiple times and average the results:
+
+```bash
+python -m ascot run ./my-suite ./tests.yaml --trials 3
+```
+
+Each trial runs independently with its own workspace. Scores are averaged across trials (per-expectation pass rate determines earned points). All `(case, trial)` pairs share the concurrency pool, so `--trials 3 -c 6` can run up to 6 trials simultaneously across different cases.
+
 ## Concepts
 
 ### Suite
@@ -167,6 +177,7 @@ python -m ascot run <suite_dir> <testcases> [options]
 | `-m, --model` | suite default | Override model for all cases |
 | `-c, --concurrency` | 2 | Max parallel cases |
 | `-t, --timeout` | per-case | Override timeout for all cases (seconds) |
+| `-n, --trials` | 1 | Number of times to run each test case |
 | `--binary` | `opencode` | Path to OpenCode binary |
 | `--venv` | none | Path to pre-configured virtual environment |
 | `--tag` | all | Only run cases matching tag (repeatable) |
@@ -196,8 +207,8 @@ python -m ascot report ./benchmark/run-001 -f json --show-cost
 Analyze a single case's execution for performance debugging. Shows per-step reasoning time, tool execution time, token usage, and cost:
 
 ```bash
-python -m ascot inspect ./benchmark/run-001/create-report
-python -m ascot inspect ./benchmark/run-001/create-report -f json
+python -m ascot inspect ./benchmark/run-001/create-report/trial-1
+python -m ascot inspect ./benchmark/run-001/create-report/trial-1 -f json
 ```
 
 ## Output Structure
@@ -207,17 +218,23 @@ Each run produces:
 ```
 benchmark/
   run-001/
-    meta.json              # Run metadata (suite, model, timestamp)
+    meta.json              # Run metadata (suite, model, timestamp, trials)
     report.json            # Aggregated results
     create-report/
       eval.json            # Test case definition
-      result.json          # Scores, expectation results, metrics, phases
-      events.jsonl         # Raw OpenCode event stream
-      workspace/           # Preserved output files
-        report.docx
+      result.json          # Aggregated scores across trials
+      trial-1/
+        result.json        # Per-trial scores, metrics, phases
+        events.jsonl       # Raw OpenCode event stream
+        workspace/         # Preserved output files
+          report.docx
+      trial-2/
+        ...
     csv-to-xlsx/
       ...
 ```
+
+When `--trials 1` (default), each case still has a `trial-1/` subdirectory.
 
 ### `result.json` Phases
 
@@ -246,28 +263,25 @@ Each `result.json` includes a `phases` object with per-phase timing, token usage
 
 ```
 ======================================================================
- Ascot Benchmark: doc-generation  |  run-001
+ Ascot Benchmark: doc-generation  |  run-001  |  3 trials (avg)
 ======================================================================
  Case                   Score      Turns   Tokens    Time
 ----------------------------------------------------------------------
- create-report          25/25         3    2,134    8.2s
- summarize-pdf          20/20         2    1,803    6.1s
- csv-to-xlsx            5/20          5    3,201   12.1s
+ create-report          25/25         3    6,402   24.6s
+ summarize-pdf          20/20         2    5,409   18.3s
+ csv-to-xlsx            12/20         5    9,603   36.3s
 ----------------------------------------------------------------------
- Total: 3 | Score: 50/65 (76.9%)
- Turns: 10 | Tokens: 7,138 | Time: 26.4s
+ Total: 3 | Score: 57/65 (87.7%)
+ Turns: 10 | Tokens: 21,414 | Time: 79.2s
 
  Details:
-   csv-to-xlsx (5/20):
-     [PASS]   5pts  output.xlsx exists
-     [FAIL]  15pts  output.xlsx contains all rows... - missing city column
-
- Phase Breakdown:
-   Case                    Setup   Agent   Save   Grade   G.Cost
-   ----------------------------------------------------------
-   create-report            0.0s    8.2s   0.0s   12.4s $ 0.0000
-   summarize-pdf            0.0s    6.1s   0.0s   10.8s $ 0.0000
-   csv-to-xlsx              0.0s   12.1s   0.0s   14.2s $ 0.0000
+   csv-to-xlsx (12/20):
+     Trial 1: [PASS] 20/20
+     Trial 2: [FAIL] 5/20
+       [FAIL]  15pts  output.xlsx contains all rows... - missing city column
+     Trial 3: [FAIL] 10/20
+       [FAIL]   5pts  output.xlsx exists - file named output.xl instead
+       [FAIL]   5pts  data is formatted correctly - no header row
 ======================================================================
 ```
 

@@ -65,6 +65,17 @@ class RunStore:
     def save_report(self, run_dir: Path, report: BenchmarkReport) -> None:
         _write_json(run_dir / "report.json", report.to_dict())
 
+    def trial_dir(self, run_dir: Path, case_id: str, trial_num: int) -> Path:
+        """Directory for a specific trial of a case."""
+        d = self.case_dir(run_dir, case_id) / f"trial-{trial_num}"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def save_trial_result(self, run_dir: Path, case_id: str, trial_num: int,
+                          result: CaseResult) -> None:
+        td = self.trial_dir(run_dir, case_id, trial_num)
+        _write_json(td / "result.json", result.to_dict())
+
 
 def _write_json(path: Path, data: Any) -> None:
     with open(path, "w") as f:

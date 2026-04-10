@@ -13,7 +13,10 @@ def format_terminal(report: BenchmarkReport, *, show_cost: bool = False) -> str:
     w = 70
 
     lines.append("=" * w)
-    lines.append(f" Ascot Benchmark: {report.suite_name}  |  {report.run_id}")
+    title = f" Ascot Benchmark: {report.suite_name}  |  {report.run_id}"
+    if report.num_trials > 1:
+        title += f"  |  {report.num_trials} trials (avg)"
+    lines.append(title)
     lines.append("=" * w)
 
     # Header
@@ -63,12 +66,27 @@ def format_terminal(report: BenchmarkReport, *, show_cost: bool = False) -> str:
             lines.append(f"   {r.case_id} ({r.score}/{r.max_score}):")
             if r.error:
                 lines.append(f"     Error: {r.error}")
-            for er in r.expectation_results:
-                tag = "PASS" if er.earned > 0 else "FAIL"
-                line = f"     [{tag}] {er.score:>3}pts  {er.desc}"
-                if er.earned == 0 and er.reasoning:
-                    line += f" - {er.reasoning[:200]}"
-                lines.append(line)
+            if r.trial_results:
+                # Show per-trial scores
+                for i, tr in enumerate(r.trial_results, 1):
+                    tag = "PASS" if tr.score == tr.max_score else "FAIL"
+                    lines.append(f"     Trial {i}: [{tag}] {tr.score}/{tr.max_score}")
+                    if tr.error:
+                        lines.append(f"       Error: {tr.error}")
+                    elif tr.score < tr.max_score:
+                        for er in tr.expectation_results:
+                            if er.earned == 0:
+                                line = f"       [FAIL] {er.score:>3}pts  {er.desc}"
+                                if er.reasoning:
+                                    line += f" - {er.reasoning[:200]}"
+                                lines.append(line)
+            else:
+                for er in r.expectation_results:
+                    tag = "PASS" if er.earned > 0 else "FAIL"
+                    line = f"     [{tag}] {er.score:>3}pts  {er.desc}"
+                    if er.earned == 0 and er.reasoning:
+                        line += f" - {er.reasoning[:200]}"
+                    lines.append(line)
 
     # Phase breakdown
     cases_with_phases = [r for r in report.results if r.phases]
