@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+log = logging.getLogger(__name__)
 
 from .models import CaseResult, Expectation, ExpectationResult, TestCase
 
@@ -131,7 +134,25 @@ async def llm_judge(
         )
         text = _extract_text_from_result(result)
         judge_stats = _extract_stats(result)
-        return _parse_judge_response(text, test_case.expectations), judge_stats
+        exp_results = _parse_judge_response(text, test_case.expectations)
+
+        # Retry once if any expectation was missing from the response
+        if any(er.reasoning == "Missing from judge response" for er in exp_results):
+            missing = [er.desc for er in exp_results if er.reasoning == "Missing from judge response"]
+            log.warning("Judge response missing expectations for case %s: %s — retrying",
+                        test_case.id, missing)
+            result = await client.async_run(
+                prompt, str(judge_ws), run_cfg=cfg, timeout_s=300,
+            )
+            text = _extract_text_from_result(result)
+            retry_stats = _extract_stats(result)
+            exp_results = _parse_judge_response(text, test_case.expectations)
+            # Merge stats: sum cost/turns, keep retry tokens
+            judge_stats["cost"] = judge_stats.get("cost", 0.0) + retry_stats.get("cost", 0.0)
+            judge_stats["turns"] = judge_stats.get("turns", 0) + retry_stats.get("turns", 0)
+            judge_stats["tokens"] = retry_stats.get("tokens", judge_stats.get("tokens", {}))
+
+        return exp_results, judge_stats
     except Exception as e:
         # On error, all expectations score 0
         return [
