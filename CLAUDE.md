@@ -22,13 +22,13 @@ Requires `opencode` CLI on PATH for `ascot run` / `ascot grade` (not needed for 
 
 The pipeline for `ascot run` flows through these modules in order:
 
-1. **`suite.py`** — Resolves suite directory layout (`resolve_suite`) and loads YAML test case files (`load_test_suite`). Suite-level defaults (`default_timeout_s`, `default_model`, `default_workspace_files_from`) are inherited by test cases unless overridden.
+1. **`suite.py`** — Resolves suite directory layout (`resolve_suite`) and loads YAML test case files (`load_test_suite`). Suite-level defaults (`default_timeout_s`, `default_model`, `default_workspace_files_from`, `grading_model`) are inherited by test cases unless overridden.
 
 2. **`runner.py`** — `BenchmarkRunner.run_all()` orchestrates execution. For each `(case, trial)` pair, it creates a workspace, runs OpenCode via `opencode_wrapper.AsyncOpenCodeClient`, preserves output, then calls the grader. All pairs share a semaphore-based concurrency pool. Permissions are merged from defaults + suite's `opencode.json`.
 
 3. **`workspace.py`** — Creates temp directories, copies suite config as `.opencode/`, copies `workspace_files_from` fixtures. Relative paths resolve against the testcases YAML directory.
 
-4. **`graders.py`** — LLM judge grading. Sets up an isolated judge workspace with `events.jsonl` + `output/` files, runs a second OpenCode session with a structured prompt, parses the JSON verdict (`_parse_judge_response`). On parse failure, all expectations score 0.
+4. **`graders.py`** — LLM judge grading. Sets up an isolated judge workspace with `events.jsonl` + `output/` files, runs a second OpenCode session with a structured prompt, parses the JSON verdict (`_parse_judge_response`). On parse failure, all expectations score 0. Accepts an optional `grading_model` to override the judge's model (priority: `grading_model` > `default_model` > opencode default).
 
 5. **`models.py`** — Dataclasses (`TestCase`, `TestSuite`, `CaseResult`, `BenchmarkReport`). `aggregate_trials()` averages scores across multi-trial runs; handles timed-out trials (empty `expectation_results`) gracefully.
 

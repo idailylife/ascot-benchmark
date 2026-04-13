@@ -7,6 +7,7 @@ name: <suite-name>
 description: "<description>"
 default_timeout_s: 300
 default_model: null          # optional model override
+grading_model: null          # optional, model for LLM judge (defaults to default_model)
 default_workspace_files_from: null  # optional, inherited by all cases
 
 test_cases:
@@ -27,6 +28,19 @@ test_cases:
 ```
 
 ## Fields
+
+### Suite-level fields
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | yes | Suite name |
+| `description` | no | Suite description |
+| `default_timeout_s` | no | Default timeout in seconds for all cases (default: 600) |
+| `default_model` | no | Default model for agent runs; also used as grading model if `grading_model` is not set |
+| `grading_model` | no | Model for the LLM judge; takes priority over `default_model` |
+| `default_workspace_files_from` | no | Default workspace files directory, inherited by all cases |
+
+### Per-case fields
 
 | Field | Required | Description |
 |---|---|---|

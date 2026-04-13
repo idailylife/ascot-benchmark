@@ -66,6 +66,7 @@ async def llm_judge(
     case_dir: Path,
     test_case: TestCase,
     client: "AsyncOpenCodeClient",
+    grading_model: str | None = None,
 ) -> tuple[list[ExpectationResult], dict]:
     """Run an OpenCode session to judge output against all expectations.
 
@@ -124,7 +125,7 @@ async def llm_judge(
         )
 
         prompt = "\n".join(sections)
-        cfg = RunConfig(permission=JUDGE_PERMISSION)
+        cfg = RunConfig(model=grading_model, permission=JUDGE_PERMISSION)
         result = await client.async_run(
             prompt, str(judge_ws), run_cfg=cfg, timeout_s=300,
         )
@@ -260,6 +261,7 @@ async def grade_case(
     run_result: "RunResult",
     duration: float,
     client: "AsyncOpenCodeClient",
+    grading_model: str | None = None,
 ) -> tuple[CaseResult, dict]:
     """Grade a test case by running LLM judge on all expectations.
 
@@ -278,7 +280,7 @@ async def grade_case(
 
     if test_case.expectations:
         expectation_results, grading_stats = await llm_judge(
-            case_dir, test_case, client,
+            case_dir, test_case, client, grading_model=grading_model,
         )
         score = sum(er.earned for er in expectation_results)
         max_score = sum(er.score for er in expectation_results)

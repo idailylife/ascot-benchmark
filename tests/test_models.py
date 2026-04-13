@@ -4,6 +4,7 @@ from ascot.models import (
     CaseResult,
     ExpectationResult,
     BenchmarkReport,
+    TestSuite,
     aggregate_trials,
 )
 
@@ -62,6 +63,17 @@ class TestBenchmarkReportToDict:
         assert d["suite_name"] == "s"
         assert d["run_id"] == "run-001"
         assert d["results"] == []
+
+
+class TestTestSuite:
+    def test_grading_model_default_none(self):
+        ts = TestSuite(name="s")
+        assert ts.grading_model is None
+
+    def test_grading_model_set(self):
+        ts = TestSuite(name="s", default_model="gpt-4", grading_model="gpt-3.5")
+        assert ts.grading_model == "gpt-3.5"
+        assert ts.default_model == "gpt-4"
 
 
 class TestAggregateTrials:

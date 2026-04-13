@@ -138,6 +138,28 @@ class TestLoadTestSuite:
         assert suite.test_cases[0].expectations[0].score == 5
         assert suite.test_cases[0].expectations[1].score == 1
 
+    def test_grading_model(self, tmp_dir):
+        data = {
+            "name": "s",
+            "default_model": "gpt-4",
+            "grading_model": "gpt-3.5",
+            "test_cases": [{"id": "c1", "prompt": "hi"}],
+        }
+        self._write_yaml(tmp_dir / "t.yaml", data)
+        suite = load_test_suite(tmp_dir / "t.yaml")
+        assert suite.default_model == "gpt-4"
+        assert suite.grading_model == "gpt-3.5"
+
+    def test_grading_model_defaults_to_none(self, tmp_dir):
+        data = {
+            "name": "s",
+            "default_model": "gpt-4",
+            "test_cases": [{"id": "c1", "prompt": "hi"}],
+        }
+        self._write_yaml(tmp_dir / "t.yaml", data)
+        suite = load_test_suite(tmp_dir / "t.yaml")
+        assert suite.grading_model is None
+
     def test_tags_and_agent(self, tmp_dir):
         data = {
             "name": "s",

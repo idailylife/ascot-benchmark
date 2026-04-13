@@ -117,6 +117,7 @@ class BenchmarkRunner:
         self.test_suite = test_suite
         self.output_dir = output_dir
         self.model = model or test_suite.default_model
+        self.grading_model = test_suite.grading_model or test_suite.default_model
         self.testcases_dir = testcases_dir
         self.concurrency = concurrency
         self.permission = build_permission(suite_dir)
@@ -235,7 +236,7 @@ class BenchmarkRunner:
 
             # Grade
             t_grade = time.monotonic()
-            case_result, grading_stats = await grade_case(tc, trial_d, result, duration, self.client)
+            case_result, grading_stats = await grade_case(tc, trial_d, result, duration, self.client, grading_model=self.grading_model)
             grading_stats["duration_s"] = round(time.monotonic() - t_grade, 3)
             phases["grading"] = grading_stats
 

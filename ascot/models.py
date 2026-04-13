@@ -41,7 +41,7 @@ class TestCase:
     expectations: list[Expectation] = field(default_factory=list)
     description: str = ""
     workspace_files_from: str | None = None
-    timeout_s: float = 120.0
+    timeout_s: float = 600.0
     model: str | None = None
     agent: str | None = None
     tags: list[str] = field(default_factory=list)
@@ -54,8 +54,9 @@ class TestSuite:
     name: str
     test_cases: list[TestCase] = field(default_factory=list)
     description: str = ""
-    default_timeout_s: float = 120.0
+    default_timeout_s: float = 600.0
     default_model: str | None = None
+    grading_model: str | None = None
     default_workspace_files_from: str | None = None
 
 
