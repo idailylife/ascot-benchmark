@@ -42,6 +42,12 @@ def main(argv: list[str] | None = None) -> None:
     grade_p.add_argument("run_dir", help="Path to run output directory")
     grade_p.add_argument("--binary", default="opencode", help="OpenCode binary path")
 
+    # --- review ---
+    review_p = subparsers.add_parser("review", help="Analyze failed cases from an existing run")
+    review_p.add_argument("run_dir", help="Path to run output directory")
+    review_p.add_argument("--binary", default="opencode", help="OpenCode binary path")
+    review_p.add_argument("--model", help="Model for review agent")
+
     # --- report ---
     report_p = subparsers.add_parser("report", help="Generate report from existing run")
     report_p.add_argument("run_dir", help="Path to run output directory")
@@ -66,6 +72,8 @@ def main(argv: list[str] | None = None) -> None:
         asyncio.run(_cmd_run(args))
     elif args.command == "grade":
         asyncio.run(_cmd_grade(args))
+    elif args.command == "review":
+        asyncio.run(_cmd_review(args))
     elif args.command == "report":
         _cmd_report(args)
     elif args.command == "inspect":
@@ -238,6 +246,100 @@ async def _cmd_grade(args: argparse.Namespace) -> None:
     _write_json(run_dir / "report.json", report.to_dict())
 
     print(format_terminal(report))
+
+
+async def _cmd_review(args: argparse.Namespace) -> None:
+    """Review failed cases from an existing run."""
+    from opencode_wrapper import AsyncOpenCodeClient
+
+    from .graders import review_case
+    from .models import CaseResult, Expectation, ExpectationResult, TestCase
+
+    run_dir = Path(args.run_dir).resolve()
+    meta_path = run_dir / "meta.json"
+    if not meta_path.exists():
+        print(f"No meta.json found in {run_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    client = AsyncOpenCodeClient(
+        binary=args.binary, isolate_db=True,
+        startup_concurrency=1, startup_delay_s=0.3,
+    )
+
+    reviewed = 0
+    skipped = 0
+    for case_dir in sorted(run_dir.iterdir()):
+        eval_path = case_dir / "eval.json"
+        if not eval_path.exists():
+            continue
+
+        with open(eval_path) as f:
+            eval_data = json.load(f)
+
+        # Reconstruct TestCase
+        expectations = [
+            Expectation(desc=e["desc"], score=e.get("score", 1))
+            for e in eval_data.get("expectations", [])
+        ]
+        tc = TestCase(
+            id=eval_data["id"],
+            prompt=eval_data["prompt"],
+            expectations=expectations,
+        )
+
+        # Collect trial results
+        trial_dirs = sorted(case_dir.glob("trial-*"))
+        trial_results: list[CaseResult] = []
+        for td in trial_dirs:
+            result_path = td / "result.json"
+            if not result_path.exists():
+                continue
+            with open(result_path) as f:
+                rd = json.load(f)
+            trial_results.append(_reconstruct_case_result(rd))
+
+        if not trial_results:
+            # Legacy: no trial subdirs, use case-level result
+            result_path = case_dir / "result.json"
+            if result_path.exists():
+                with open(result_path) as f:
+                    rd = json.load(f)
+                trial_results.append(_reconstruct_case_result(rd))
+
+        if not trial_results:
+            continue
+
+        # Check if any expectation scored 0
+        has_failure = any(
+            er.earned == 0
+            for tr in trial_results
+            for er in tr.expectation_results
+        )
+        if not has_failure:
+            print(f"Skipping case: {tc.id} (all trials passed)")
+            skipped += 1
+            continue
+
+        print(f"Reviewing case: {tc.id} ...")
+        review_text = await review_case(
+            tc, case_dir, trial_results, client, model=args.model,
+        )
+        review_path = case_dir / "review.md"
+        review_path.write_text(review_text, encoding="utf-8")
+        reviewed += 1
+
+        # Print summary (first 500 chars)
+        print(f"\n  {tc.id}:")
+        for line in review_text[:500].splitlines():
+            print(f"    {line}")
+        if len(review_text) > 500:
+            print(f"    ... (full review: {review_path})")
+        print()
+
+    if reviewed == 0:
+        print("No failed cases to review.")
+    else:
+        print(f"Reviewed {reviewed} case(s). Results saved to review.md in each case directory.")
 
 
 def _cmd_report(args: argparse.Namespace) -> None:

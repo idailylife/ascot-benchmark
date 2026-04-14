@@ -341,3 +341,135 @@ def error_result(case_id: str, error: Exception, test_case: TestCase | None = No
         max_score=max_score,
         error=f"{type(error).__name__}: {error}",
     )
+
+
+# ---------------------------------------------------------------------------
+# Review agent
+# ---------------------------------------------------------------------------
+
+
+def _setup_review_workspace(case_dir: Path, trial_results: list[CaseResult]) -> Path:
+    """Create workspace for the review agent with all trial artifacts."""
+    review_ws = Path(tempfile.mkdtemp(prefix="ascot_review_"))
+
+    trial_dirs = sorted(case_dir.glob("trial-*"))
+    for td in trial_dirs:
+        trial_name = td.name  # e.g. "trial-1"
+        dest = review_ws / trial_name
+
+        # Copy events
+        events_src = td / "events.jsonl"
+        if events_src.exists():
+            dest.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(events_src, dest / "events.jsonl")
+
+        # Copy workspace output
+        ws_src = td / "workspace"
+        if ws_src.is_dir():
+            shutil.copytree(ws_src, dest / "output")
+
+    return review_ws
+
+
+def _build_review_prompt(
+    test_case: TestCase,
+    trial_results: list[CaseResult],
+) -> str:
+    """Build the prompt for the review agent."""
+    sections: list[str] = []
+
+    sections.append(
+        "You are a diagnostic reviewer analyzing why a benchmark test case "
+        "failed. Do NOT re-grade. Your job is to identify root causes and "
+        "patterns across trials.\n"
+    )
+
+    # Original task
+    sections.append(f"## Original Task Prompt\n{test_case.prompt}\n")
+
+    # Expectations
+    exp_lines = []
+    for i, exp in enumerate(test_case.expectations):
+        exp_lines.append(f"{i + 1}. {exp.desc} ({exp.score} pts)")
+    sections.append(f"## Expectations\n" + "\n".join(exp_lines) + "\n")
+
+    # Per-trial results summary
+    sections.append("## Trial Results\n")
+    has_mixed = False
+    any_pass = False
+    any_fail = False
+    for i, tr in enumerate(trial_results, 1):
+        tag = "PASS" if tr.score == tr.max_score else "FAIL"
+        if tr.score == tr.max_score:
+            any_pass = True
+        else:
+            any_fail = True
+        sections.append(f"### Trial {i}: [{tag}] {tr.score}/{tr.max_score}")
+        if tr.error:
+            sections.append(f"Error: {tr.error}")
+        for er in tr.expectation_results:
+            status = "PASS" if er.earned > 0 else "FAIL"
+            line = f"- [{status}] {er.desc}"
+            if er.reasoning:
+                line += f" — {er.reasoning[:300]}"
+            sections.append(line)
+        sections.append("")
+
+    has_mixed = any_pass and any_fail
+
+    # Instructions
+    sections.append("## Available Evidence\n")
+    for i in range(1, len(trial_results) + 1):
+        sections.append(
+            f"- `trial-{i}/events.jsonl`: Agent execution log for trial {i}\n"
+            f"- `trial-{i}/output/`: Files produced by the agent in trial {i}"
+        )
+    sections.append("")
+
+    if has_mixed:
+        sections.append(
+            "IMPORTANT: Some trials passed and some failed. Compare the "
+            "successful trial(s) against the failed one(s) to identify what "
+            "the agent did differently. Focus on what made the difference.\n"
+        )
+
+    sections.append(
+        "Analyze the evidence and write a diagnostic report in markdown. Include:\n"
+        "- Summary of the root cause\n"
+        "- Per-trial observations (what happened in each trial)\n"
+        "- Failure patterns (if any)\n"
+        "- Suggestions for fixing the issue\n"
+    )
+
+    return "\n".join(sections)
+
+
+async def review_case(
+    test_case: TestCase,
+    case_dir: Path,
+    trial_results: list[CaseResult],
+    client: "AsyncOpenCodeClient",
+    model: str | None = None,
+) -> str:
+    """Run a review agent to diagnose why a case failed.
+
+    Analyzes all trials for a case, comparing successful and failed trials
+    to identify patterns and root causes.
+
+    Returns the review text (markdown).
+    """
+    from opencode_wrapper import RunConfig
+
+    review_ws = _setup_review_workspace(case_dir, trial_results)
+    try:
+        prompt = _build_review_prompt(test_case, trial_results)
+        cfg = RunConfig(model=model, permission=JUDGE_PERMISSION)
+        result = await client.async_run(
+            prompt, str(review_ws), run_cfg=cfg, timeout_s=300,
+        )
+        return _extract_text_from_result(result) or "(empty review response)"
+    except Exception as e:
+        log.error("Review error for case %s: %s", test_case.id, e)
+        return f"Review error: {e}"
+    finally:
+        shutil.rmtree(review_ws, ignore_errors=True)
