@@ -28,7 +28,7 @@ The pipeline for `ascot run` flows through these modules in order:
 
 3. **`workspace.py`** — Creates temp directories, copies suite config as `.opencode/`, copies `workspace_files_from` fixtures. Relative paths resolve against the testcases YAML directory.
 
-4. **`graders.py`** — LLM judge grading. Sets up an isolated judge workspace with `events.jsonl` + `output/` files, runs a second OpenCode session with a structured prompt, parses the JSON verdict (`_parse_judge_response`). On parse failure, all expectations score 0. Accepts an optional `grading_model` to override the judge's model (priority: `grading_model` > `default_model` > opencode default).
+4. **`graders.py`** — LLM judge grading. Sets up an isolated judge workspace with `events.jsonl` + `output/` files, runs a second OpenCode session with a structured prompt, parses the JSON verdict (`_parse_judge_response`). On parse failure, all expectations score 0. Accepts an optional `grading_model` to override the judge's model (priority: `grading_model` > `default_model` > opencode default). Also contains `review_case()` for the `ascot review` subcommand — a diagnostic agent that analyzes failed cases across trials, comparing successful vs failed trials to identify root causes.
 
 5. **`models.py`** — Dataclasses (`TestCase`, `TestSuite`, `CaseResult`, `BenchmarkReport`). `aggregate_trials()` averages scores across multi-trial runs; handles timed-out trials (empty `expectation_results`) gracefully.
 
@@ -38,7 +38,7 @@ The pipeline for `ascot run` flows through these modules in order:
 
 8. **`inspect.py`** — Parses `events.jsonl` into per-step traces for performance debugging.
 
-9. **`cli.py`** — Argparse CLI with subcommands: `run`, `grade`, `report`, `inspect`.
+9. **`cli.py`** — Argparse CLI with subcommands: `run`, `grade`, `review`, `report`, `inspect`.
 
 ## Key design notes
 
