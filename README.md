@@ -91,6 +91,7 @@ name: doc-generation
 description: "Document generation suite benchmark"
 default_timeout_s: 180
 default_model: anthropic/claude-sonnet-4-20250514
+grading_model: null                               # optional, model for LLM judge (defaults to default_model)
 default_workspace_files_from: fixtures/shared  # optional, inherited by all cases
 
 test_cases:
@@ -193,6 +194,22 @@ Re-run LLM judge grading on a previous run (e.g. after updating expectations):
 ```bash
 python -m ascot grade ./benchmark/run-001
 ```
+
+### `ascot review`
+
+Analyze failed cases from an existing run. A diagnostic LLM agent reads each failed case's events and outputs across all trials, compares successful vs failed trials, and writes a markdown report:
+
+```bash
+python -m ascot review ./benchmark/run-001
+python -m ascot review ./benchmark/run-001 --model anthropic/claude-sonnet-4-20250514
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--binary` | `opencode` | Path to OpenCode binary |
+| `--model` | opencode default | Model for the review agent |
+
+Results are saved to `<case_dir>/review.md`. Cases where all trials passed are skipped.
 
 ### `ascot report`
 
