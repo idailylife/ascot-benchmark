@@ -136,11 +136,16 @@ async def llm_judge(
         judge_stats = _extract_stats(result)
         exp_results = _parse_judge_response(text, test_case.expectations)
 
-        # Retry once if any expectation was missing from the response
-        if any(er.reasoning == "Missing from judge response" for er in exp_results):
-            missing = [er.desc for er in exp_results if er.reasoning == "Missing from judge response"]
-            log.warning("Judge response missing expectations for case %s: %s — retrying",
-                        test_case.id, missing)
+        # Retry once if judge response had issues
+        should_retry = any(
+            er.reasoning == "Missing from judge response"
+            or er.reasoning.startswith("Could not parse judge response")
+            for er in exp_results
+        )
+        if should_retry:
+            reasons = [er.reasoning[:100] for er in exp_results if er.earned == 0]
+            log.warning("Judge response issue for case %s: %s — retrying",
+                        test_case.id, reasons)
             result = await client.async_run(
                 prompt, str(judge_ws), run_cfg=cfg, timeout_s=300,
             )
