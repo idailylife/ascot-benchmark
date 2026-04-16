@@ -337,6 +337,132 @@ async def grade_case(
     ), grading_stats
 
 
+async def regrade_run(
+    run_dir: Path,
+    client: "AsyncOpenCodeClient",
+    concurrency: int = 4,
+    grading_model: str | None = None,
+) -> "BenchmarkReport":
+    """Re-grade all cases in an existing run with concurrency.
+
+    Discovers cases/trials from the run directory, grades them in parallel
+    using a semaphore, aggregates trial results, and returns a BenchmarkReport.
+    """
+    import asyncio
+    from collections import defaultdict
+
+    from opencode_wrapper import RunResult
+
+    from .models import BenchmarkReport, Expectation, aggregate_trials
+    from .runner import build_report
+    from .store import _write_json
+
+    meta_path = run_dir / "meta.json"
+    with open(meta_path) as f:
+        meta = json.load(f)
+
+    num_trials = meta.get("trials", 1)
+    sem = asyncio.Semaphore(concurrency)
+
+    # Discover all (TestCase, trial_dir, result_data) tuples
+    grading_tasks: list[tuple[TestCase, Path, dict]] = []
+    case_order: list[str] = []
+
+    for case_dir in sorted(run_dir.iterdir()):
+        eval_path = case_dir / "eval.json"
+        if not eval_path.exists():
+            continue
+
+        with open(eval_path) as f:
+            eval_data = json.load(f)
+
+        expectations = [
+            Expectation(desc=e["desc"], score=e.get("score", 1))
+            for e in eval_data.get("expectations", [])
+        ]
+        tc = TestCase(
+            id=eval_data["id"],
+            prompt=eval_data["prompt"],
+            expectations=expectations,
+        )
+        case_order.append(tc.id)
+
+        trial_dirs = sorted(case_dir.glob("trial-*"))
+        if trial_dirs:
+            for td in trial_dirs:
+                ws_path = td / "workspace"
+                result_path = td / "result.json"
+                if not ws_path.exists():
+                    continue
+                with open(result_path) as f:
+                    result_data = json.load(f)
+                grading_tasks.append((tc, td, result_data))
+        else:
+            # Legacy: no trial subdirectories
+            ws_path = case_dir / "workspace"
+            result_path = case_dir / "result.json"
+            if not ws_path.exists():
+                continue
+            with open(result_path) as f:
+                result_data = json.load(f)
+            grading_tasks.append((tc, case_dir, result_data))
+
+    async def _regrade_one(
+        tc: TestCase, trial_dir: Path, result_data: dict,
+    ) -> tuple[str, CaseResult]:
+        async with sem:
+            mock_result = RunResult()
+            mock_result.exit_code = result_data.get("exit_code")
+
+            cr, _ = await grade_case(
+                tc, trial_dir, mock_result,
+                result_data.get("duration_s", 0.0), client,
+                grading_model=grading_model,
+            )
+            # Preserve original agent metrics
+            cr.turns = result_data.get("turns", 0)
+            cr.token_usage = result_data.get("token_usage", {})
+            cr.total_cost = result_data.get("total_cost", 0.0)
+            cr.duration_s = result_data.get("duration_s", 0.0)
+
+            _write_json(trial_dir / "result.json", cr.to_dict())
+            return (tc.id, cr)
+
+    # Run all grading tasks concurrently
+    task_coros = [
+        asyncio.create_task(_regrade_one(tc, td, rd))
+        for tc, td, rd in grading_tasks
+    ]
+    completed = await asyncio.gather(*task_coros)
+
+    # Group by case_id and aggregate
+    by_case: dict[str, list[CaseResult]] = defaultdict(list)
+    for case_id, cr in completed:
+        by_case[case_id].append(cr)
+
+    results: list[CaseResult] = []
+    for case_id in case_order:
+        trials = by_case.get(case_id, [])
+        if not trials:
+            continue
+        if len(trials) == 1 and num_trials <= 1:
+            results.append(trials[0])
+        else:
+            agg = aggregate_trials(case_id, trials)
+            results.append(agg)
+        # Save case-level result
+        case_dir = run_dir / case_id
+        if case_dir.is_dir():
+            _write_json(case_dir / "result.json", results[-1].to_dict())
+
+    run_id = run_dir.name
+    report = build_report(meta.get("suite_name", "unknown"), run_id, results)
+    report.num_trials = num_trials
+    _write_json(run_dir / "report.json", report.to_dict())
+
+    return report
+
+
 def error_result(case_id: str, error: Exception, test_case: TestCase | None = None) -> CaseResult:
     """Create a failed CaseResult from an exception."""
     max_score = sum(e.score for e in test_case.expectations) if test_case else 0

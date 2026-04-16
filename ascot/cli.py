@@ -41,6 +41,8 @@ def main(argv: list[str] | None = None) -> None:
     grade_p = subparsers.add_parser("grade", help="Re-grade an existing run")
     grade_p.add_argument("run_dir", help="Path to run output directory")
     grade_p.add_argument("--binary", default="opencode", help="OpenCode binary path")
+    grade_p.add_argument("--concurrency", "-c", type=int, default=4, help="Parallel grading limit")
+    grade_p.add_argument("--grading-model", help="Override model for judge")
 
     # --- review ---
     review_p = subparsers.add_parser("review", help="Analyze failed cases from an existing run")
@@ -137,13 +139,10 @@ async def _cmd_run(args: argparse.Namespace) -> None:
 
 async def _cmd_grade(args: argparse.Namespace) -> None:
     """Re-grade an existing run using LLM judge."""
-    from opencode_wrapper import AsyncOpenCodeClient, RunResult
+    from opencode_wrapper import AsyncOpenCodeClient
 
-    from .graders import grade_case
-    from .models import CaseResult, Expectation, TestCase, aggregate_trials
+    from .graders import regrade_run
     from .report import format_terminal
-    from .runner import build_report
-    from .store import RunStore, _write_json
 
     run_dir = Path(args.run_dir).resolve()
     meta_path = run_dir / "meta.json"
@@ -151,99 +150,16 @@ async def _cmd_grade(args: argparse.Namespace) -> None:
         print(f"No meta.json found in {run_dir}", file=sys.stderr)
         sys.exit(1)
 
-    with open(meta_path) as f:
-        meta = json.load(f)
-
-    num_trials = meta.get("trials", 1)
-
     client = AsyncOpenCodeClient(
         binary=args.binary, isolate_db=True,
         startup_concurrency=1, startup_delay_s=0.3,
     )
 
-    # Re-grade each case
-    results: list[CaseResult] = []
-    for case_dir in sorted(run_dir.iterdir()):
-        eval_path = case_dir / "eval.json"
-        if not eval_path.exists():
-            continue
-
-        with open(eval_path) as f:
-            eval_data = json.load(f)
-
-        expectations = [
-            Expectation(desc=e["desc"], score=e.get("score", 1))
-            for e in eval_data.get("expectations", [])
-        ]
-        tc = TestCase(
-            id=eval_data["id"],
-            prompt=eval_data["prompt"],
-            expectations=expectations,
-        )
-
-        # Find trial directories
-        trial_dirs = sorted(case_dir.glob("trial-*"))
-        if trial_dirs:
-            trial_results = []
-            for td in trial_dirs:
-                ws_path = td / "workspace"
-                result_path = td / "result.json"
-                if not ws_path.exists():
-                    continue
-
-                with open(result_path) as f:
-                    result_data = json.load(f)
-
-                mock_result = RunResult()
-                mock_result.exit_code = result_data.get("exit_code")
-
-                cr, _grading_stats = await grade_case(
-                    tc, td, mock_result,
-                    result_data.get("duration_s", 0.0), client,
-                )
-                # Preserve original metrics
-                cr.turns = result_data.get("turns", 0)
-                cr.token_usage = result_data.get("token_usage", {})
-                cr.total_cost = result_data.get("total_cost", 0.0)
-                cr.duration_s = result_data.get("duration_s", 0.0)
-                trial_results.append(cr)
-
-                _write_json(td / "result.json", cr.to_dict())
-
-            if trial_results:
-                agg = aggregate_trials(tc.id, trial_results)
-                results.append(agg)
-                _write_json(case_dir / "result.json", agg.to_dict())
-        else:
-            # Legacy: no trial subdirectories
-            ws_path = case_dir / "workspace"
-            result_path = case_dir / "result.json"
-            if not ws_path.exists():
-                continue
-
-            with open(result_path) as f:
-                result_data = json.load(f)
-
-            mock_result = RunResult()
-            mock_result.exit_code = result_data.get("exit_code")
-
-            cr, _grading_stats = await grade_case(
-                tc, case_dir, mock_result,
-                result_data.get("duration_s", 0.0), client,
-            )
-            cr.turns = result_data.get("turns", 0)
-            cr.token_usage = result_data.get("token_usage", {})
-            cr.total_cost = result_data.get("total_cost", 0.0)
-            cr.duration_s = result_data.get("duration_s", 0.0)
-            results.append(cr)
-
-            _write_json(result_path, cr.to_dict())
-
-    run_id = run_dir.name
-    report = build_report(meta.get("suite_name", "unknown"), run_id, results)
-    report.num_trials = num_trials
-
-    _write_json(run_dir / "report.json", report.to_dict())
+    report = await regrade_run(
+        run_dir, client,
+        concurrency=args.concurrency,
+        grading_model=getattr(args, "grading_model", None),
+    )
 
     print(format_terminal(report))
 
