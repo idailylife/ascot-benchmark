@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -110,12 +109,14 @@ async def llm_judge(
                 f"## Output Files (in output/ directory)\n{file_listing}\n"
             )
 
+        n_expectations = len(test_case.expectations)
         sections.append(
             "Evaluate based on ALL available evidence: read events.jsonl to "
             "understand the agent's execution, and inspect files in output/ to "
             "verify results. For binary files (xlsx, docx, etc.), write and run "
             "Python scripts to parse and verify their contents.\n\n"
-            "Reply with ONLY a JSON object in this exact format:\n"
+            "Write your verdict to a file named `verdict.json` in the current "
+            "directory, with exactly this structure:\n"
             "```json\n"
             "{\n"
             '  "results": [\n'
@@ -124,7 +125,15 @@ async def llm_judge(
             "  ]\n"
             "}\n"
             "```\n"
-            "You MUST include exactly one entry per expectation, in order, using 0-based index."
+            f"You MUST include exactly {n_expectations} entries (one per "
+            "expectation), in order, using 0-based index. After writing, read "
+            "the file back and verify:\n"
+            "  1. It is valid JSON (e.g. "
+            "`python -c \"import json; json.load(open('verdict.json'))\"`)\n"
+            f"  2. `results` has exactly {n_expectations} entries\n"
+            "  3. Every entry has `index`, `passed`, and `reasoning` fields\n"
+            "If any check fails, rewrite the file. Then reply with a one-line "
+            "confirmation (e.g. \"verdict written\")."
         )
 
         prompt = "\n".join(sections)
@@ -132,26 +141,26 @@ async def llm_judge(
         result = await client.async_run(
             prompt, str(judge_ws), run_cfg=cfg, timeout_s=300,
         )
-        text = _extract_text_from_result(result)
         judge_stats = _extract_stats(result)
-        exp_results = _parse_judge_response(text, test_case.expectations)
+        exp_results = _read_verdict_file(judge_ws, test_case.expectations)
 
-        # Retry once if judge response had issues
+        # Retry once if verdict file had issues
         should_retry = any(
             er.reasoning == "Missing from judge response"
-            or er.reasoning.startswith("Could not parse judge response")
+            or er.reasoning.startswith("Could not read verdict.json")
             for er in exp_results
         )
         if should_retry:
             reasons = [er.reasoning[:100] for er in exp_results if er.earned == 0]
-            log.warning("Judge response issue for case %s: %s — retrying",
+            log.warning("Judge verdict issue for case %s: %s — retrying",
                         test_case.id, reasons)
+            # Clear stale verdict before retry
+            (judge_ws / "verdict.json").unlink(missing_ok=True)
             result = await client.async_run(
                 prompt, str(judge_ws), run_cfg=cfg, timeout_s=300,
             )
-            text = _extract_text_from_result(result)
             retry_stats = _extract_stats(result)
-            exp_results = _parse_judge_response(text, test_case.expectations)
+            exp_results = _read_verdict_file(judge_ws, test_case.expectations)
             # Merge stats: sum cost/turns, keep retry tokens
             judge_stats["cost"] = judge_stats.get("cost", 0.0) + retry_stats.get("cost", 0.0)
             judge_stats["turns"] = judge_stats.get("turns", 0) + retry_stats.get("turns", 0)
@@ -171,35 +180,32 @@ async def llm_judge(
         shutil.rmtree(judge_ws, ignore_errors=True)
 
 
-def _parse_judge_response(
-    text: str, expectations: list[Expectation],
+def _read_verdict_file(
+    judge_ws: Path, expectations: list[Expectation],
 ) -> list[ExpectationResult]:
-    """Parse judge response into per-expectation results."""
-    # Try to find JSON with "results" array
-    for match in re.finditer(r'\{[^{}]*"results"\s*:\s*\[.*?\]\s*\}', text, re.DOTALL):
-        try:
-            obj = json.loads(match.group())
-            if "results" in obj and isinstance(obj["results"], list):
-                return _map_results(obj["results"], expectations)
-        except json.JSONDecodeError:
-            continue
+    """Read judge verdict from `verdict.json` in the judge workspace.
 
-    # Fallback: try parsing the entire text as JSON
+    On missing file, invalid JSON, or missing `results` key, returns a list
+    where every expectation earns 0 with a reasoning starting with
+    "Could not read verdict.json" (the retry trigger).
+    """
+    verdict_path = judge_ws / "verdict.json"
     try:
-        obj = json.loads(text.strip())
-        if isinstance(obj, dict) and "results" in obj:
-            return _map_results(obj["results"], expectations)
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    # Could not parse — all expectations fail
-    return [
-        ExpectationResult(
-            desc=exp.desc, score=exp.score, earned=0,
-            reasoning=f"Could not parse judge response: {text[:300]}",
-        )
-        for exp in expectations
-    ]
+        with open(verdict_path) as f:
+            obj = json.load(f)
+        if not isinstance(obj, dict) or "results" not in obj:
+            raise ValueError("missing 'results' key")
+        if not isinstance(obj["results"], list):
+            raise ValueError("'results' is not a list")
+        return _map_results(obj["results"], expectations)
+    except (FileNotFoundError, json.JSONDecodeError, ValueError) as e:
+        return [
+            ExpectationResult(
+                desc=exp.desc, score=exp.score, earned=0,
+                reasoning=f"Could not read verdict.json: {e}",
+            )
+            for exp in expectations
+        ]
 
 
 def _map_results(
