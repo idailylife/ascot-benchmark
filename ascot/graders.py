@@ -145,12 +145,9 @@ async def llm_judge(
         exp_results = _read_verdict_file(judge_ws, test_case.expectations)
 
         # Retry once if verdict file had issues
-        should_retry = any(
-            er.reasoning == "Missing from judge response"
-            or er.reasoning.startswith("Could not read verdict.json")
-            for er in exp_results
-        )
+        should_retry = _has_verdict_issue(exp_results)
         if should_retry:
+            _dump_judge_debug(case_dir, "", judge_ws, result, test_case.id)
             reasons = [er.reasoning[:100] for er in exp_results if er.earned == 0]
             log.warning("Judge verdict issue for case %s: %s — retrying",
                         test_case.id, reasons)
@@ -161,6 +158,8 @@ async def llm_judge(
             )
             retry_stats = _extract_stats(result)
             exp_results = _read_verdict_file(judge_ws, test_case.expectations)
+            if _has_verdict_issue(exp_results):
+                _dump_judge_debug(case_dir, ".retry", judge_ws, result, test_case.id)
             # Merge stats: sum cost/turns, keep retry tokens
             judge_stats["cost"] = judge_stats.get("cost", 0.0) + retry_stats.get("cost", 0.0)
             judge_stats["turns"] = judge_stats.get("turns", 0) + retry_stats.get("turns", 0)
@@ -178,6 +177,46 @@ async def llm_judge(
         ], empty_stats
     finally:
         shutil.rmtree(judge_ws, ignore_errors=True)
+
+
+def _has_verdict_issue(exp_results: list[ExpectationResult]) -> bool:
+    """True if any expectation reasoning indicates a parse/shape problem."""
+    return any(
+        er.reasoning == "Missing from judge response"
+        or er.reasoning.startswith("Could not read verdict.json")
+        for er in exp_results
+    )
+
+
+def _dump_judge_debug(
+    dump_dir: Path,
+    suffix: str,
+    judge_ws: Path,
+    run_result: "RunResult",
+    case_id: str,
+) -> None:
+    """Copy the malformed verdict.json and judge final_text into dump_dir.
+
+    Writes `verdict.bad{suffix}.json` (if the file exists) and
+    `judge_response.bad{suffix}.txt` so the raw judge output can be inspected
+    after the judge workspace tempdir is cleaned up.
+    """
+    try:
+        dump_dir.mkdir(parents=True, exist_ok=True)
+        verdict_src = judge_ws / "verdict.json"
+        if verdict_src.exists():
+            verdict_dest = dump_dir / f"verdict.bad{suffix}.json"
+            shutil.copy2(verdict_src, verdict_dest)
+            log.warning("Saved malformed verdict for case %s to %s",
+                        case_id, verdict_dest)
+        final_text = _extract_text_from_result(run_result)
+        text_dest = dump_dir / f"judge_response.bad{suffix}.txt"
+        text_dest.write_text(final_text if final_text else "(empty)")
+        log.warning("Saved judge response text for case %s to %s",
+                    case_id, text_dest)
+    except Exception as e:
+        log.warning("Failed to dump judge debug artifacts for case %s: %s",
+                    case_id, e)
 
 
 def _read_verdict_file(

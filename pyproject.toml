@@ -1,6 +1,6 @@
 [project]
 name = "ascot"
-version = "0.5.4"
+version = "0.5.5"
 description = "Benchmark framework for evaluating OpenCode suites"
 requires-python = ">=3.10"
 dependencies = [
