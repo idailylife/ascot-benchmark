@@ -45,6 +45,7 @@ class TestCase:
     model: str | None = None
     agent: str | None = None
     tags: list[str] = field(default_factory=list)
+    test_script: str | None = None
 
 
 @dataclass
@@ -58,6 +59,7 @@ class TestSuite:
     default_model: str | None = None
     grading_model: str | None = None
     default_workspace_files_from: str | None = None
+    default_test_script_timeout_s: float = 60.0
 
 
 @dataclass

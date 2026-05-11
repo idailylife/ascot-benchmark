@@ -333,28 +333,43 @@ async def grade_case(
     duration: float,
     client: "AsyncOpenCodeClient",
     grading_model: str | None = None,
+    test_script_path: Path | None = None,
+    test_script_timeout_s: float = 60.0,
 ) -> tuple[CaseResult, dict]:
-    """Grade a test case by running LLM judge on all expectations.
+    """Grade a test case via test_script (deterministic) and/or LLM judge.
 
     Args:
         case_dir: Path to the case output directory containing events.jsonl
                   and workspace/.
         run_result: Used only for extracting agent token/cost stats.
+        test_script_path: Absolute path to a pytest file. If set, runs pytest
+                  in the case workspace and contributes one ExpectationResult
+                  per test (1 pt each), prepended before any LLM-judged
+                  expectation results.
+        test_script_timeout_s: Timeout for the pytest invocation.
 
     Returns (case_result, grading_stats) where grading_stats contains
-    token usage, cost, and turns from the judge session.
+    token usage, cost, and turns from the judge session (zero if no
+    LLM-judged expectations).
     """
+    from .verifiers import run_test_script
+
     expectation_results: list[ExpectationResult] = []
-    score = 0
-    max_score = 0
     grading_stats: dict = {"tokens": {}, "cost": 0.0, "turns": 0}
 
+    if test_script_path is not None:
+        expectation_results.extend(run_test_script(
+            case_dir / "workspace", test_script_path, test_script_timeout_s,
+        ))
+
     if test_case.expectations:
-        expectation_results, grading_stats = await llm_judge(
+        judge_results, grading_stats = await llm_judge(
             case_dir, test_case, client, grading_model=grading_model,
         )
-        score = sum(er.earned for er in expectation_results)
-        max_score = sum(er.score for er in expectation_results)
+        expectation_results.extend(judge_results)
+
+    score = sum(er.earned for er in expectation_results)
+    max_score = sum(er.score for er in expectation_results)
 
     token_dict = {}
     if hasattr(run_result, "token_usage"):
@@ -410,7 +425,7 @@ async def regrade_run(
     sem = asyncio.Semaphore(concurrency)
 
     # Discover all (TestCase, trial_dir, result_data) tuples
-    grading_tasks: list[tuple[TestCase, Path, dict]] = []
+    grading_tasks: list[tuple[TestCase, Path, dict, Path | None, float]] = []
     case_order: list[str] = []
 
     for case_dir in sorted(run_dir.iterdir()):
@@ -429,8 +444,13 @@ async def regrade_run(
             id=eval_data["id"],
             prompt=eval_data["prompt"],
             expectations=expectations,
+            test_script=eval_data.get("test_script"),
         )
         case_order.append(tc.id)
+
+        ts_path_str = eval_data.get("test_script_path")
+        ts_path = Path(ts_path_str) if ts_path_str else None
+        ts_timeout = eval_data.get("test_script_timeout_s", 60.0)
 
         trial_dirs = sorted(case_dir.glob("trial-*"))
         if trial_dirs:
@@ -441,7 +461,7 @@ async def regrade_run(
                     continue
                 with open(result_path) as f:
                     result_data = json.load(f)
-                grading_tasks.append((tc, td, result_data))
+                grading_tasks.append((tc, td, result_data, ts_path, ts_timeout))
         else:
             # Legacy: no trial subdirectories
             ws_path = case_dir / "workspace"
@@ -450,10 +470,11 @@ async def regrade_run(
                 continue
             with open(result_path) as f:
                 result_data = json.load(f)
-            grading_tasks.append((tc, case_dir, result_data))
+            grading_tasks.append((tc, case_dir, result_data, ts_path, ts_timeout))
 
     async def _regrade_one(
         tc: TestCase, trial_dir: Path, result_data: dict,
+        ts_path: Path | None, ts_timeout: float,
     ) -> tuple[str, CaseResult]:
         async with sem:
             mock_result = RunResult()
@@ -463,6 +484,8 @@ async def regrade_run(
                 tc, trial_dir, mock_result,
                 result_data.get("duration_s", 0.0), client,
                 grading_model=grading_model,
+                test_script_path=ts_path,
+                test_script_timeout_s=ts_timeout,
             )
             # Preserve original agent metrics
             cr.turns = result_data.get("turns", 0)
@@ -475,8 +498,8 @@ async def regrade_run(
 
     # Run all grading tasks concurrently
     task_coros = [
-        asyncio.create_task(_regrade_one(tc, td, rd))
-        for tc, td, rd in grading_tasks
+        asyncio.create_task(_regrade_one(tc, td, rd, ts, tt))
+        for tc, td, rd, ts, tt in grading_tasks
     ]
     completed = await asyncio.gather(*task_coros)
 

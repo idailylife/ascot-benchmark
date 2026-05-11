@@ -48,6 +48,7 @@ def _parse_test_case(raw: dict[str, Any], defaults: dict[str, Any]) -> TestCase:
         model=raw.get("model", defaults.get("default_model")),
         agent=raw.get("agent"),
         tags=raw.get("tags", []),
+        test_script=raw.get("test_script"),
     )
 
 
@@ -104,4 +105,5 @@ def _build_suite(data: dict[str, Any]) -> TestSuite:
         default_model=defaults["default_model"],
         grading_model=data.get("grading_model"),
         default_workspace_files_from=defaults["default_workspace_files_from"],
+        default_test_script_timeout_s=data.get("default_test_script_timeout_s", 60.0),
     )

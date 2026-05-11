@@ -134,6 +134,7 @@ test_cases:
 | `id` | yes | Unique identifier |
 | `prompt` | yes | Prompt sent to OpenCode |
 | `expectations` | no | List of `{desc, score}` items evaluated by LLM judge |
+| `test_script` | no | Path to a pytest file (or nodeid `file.py::test_name`) for deterministic grading; see [Grading](#grading) |
 | `workspace_files_from` | no | Directory of files to copy into workspace (supports binary); inherits from suite-level `default_workspace_files_from` if not set |
 | `timeout_s` | no | Per-case timeout in seconds (default: 120) |
 | `model` | no | Model override for this case |
@@ -157,11 +158,21 @@ The LLM judge evaluates all expectations and assigns scores. Results are display
 
 ### Grading
 
-Ascot uses an LLM judge for grading. A separate OpenCode session evaluates the output against all `expectations`. The judge runs in its own isolated workspace with full permissions, so it can write and run scripts to inspect binary files (xlsx, docx, images, etc.).
+Ascot supports two grading paths that can be combined per case:
 
-The judge receives two sources of evidence:
+**LLM judge (`expectations`).** A separate OpenCode session evaluates the agent's output against each `desc`. The judge runs in its own isolated workspace with full permissions, so it can write and run scripts to inspect binary files (xlsx, docx, images, etc.). It receives two sources of evidence:
 - **`events.jsonl`**: The agent's complete execution log — every reasoning step, tool call, and output — so the judge can understand exactly what the agent did.
 - **`output/`**: All files the agent produced, for direct inspection.
+
+**Test script (`test_script`).** A pytest file run with `cwd = <case workspace>` after the agent finishes. Each pytest test = 1 point (skipped tests excluded). Use the pytest nodeid form `file.py::test_name` to share one verifier file across multiple cases:
+
+```yaml
+- id: page-count
+  prompt: "Write the page count to page_count.txt"
+  test_script: ./verifiers/test_pages.py::test_page_count
+```
+
+A case with both fields runs `test_script` first, then the LLM judge for the fuzzy expectations; the two result lists are concatenated. A case with only `test_script` skips the LLM judge entirely — no judge cost. See `docs/YAML_FORMAT.md` for full details (timeout, edge cases, error surfacing).
 
 Grading is strictly outcome-based: if the agent did extensive work but didn't produce the expected result, the expectation scores 0.
 

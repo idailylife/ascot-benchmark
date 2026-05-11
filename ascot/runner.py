@@ -180,7 +180,12 @@ class BenchmarkRunner:
 
     async def _run_single(self, tc: TestCase, trial_num: int) -> CaseResult:
         log.info("Running case: %s (trial %d/%d)", tc.id, trial_num, self.trials)
-        self.store.save_eval(self.run_dir, tc.id, tc)
+        ts_path = self._resolve_test_script(tc)
+        self.store.save_eval(
+            self.run_dir, tc.id, tc,
+            test_script_path=ts_path,
+            test_script_timeout_s=self.test_suite.default_test_script_timeout_s,
+        )
         phases: dict[str, dict] = {}
 
         t_ws = time.monotonic()
@@ -236,7 +241,12 @@ class BenchmarkRunner:
 
             # Grade
             t_grade = time.monotonic()
-            case_result, grading_stats = await grade_case(tc, trial_d, result, duration, self.client, grading_model=self.grading_model)
+            case_result, grading_stats = await grade_case(
+                tc, trial_d, result, duration, self.client,
+                grading_model=self.grading_model,
+                test_script_path=ts_path,
+                test_script_timeout_s=self.test_suite.default_test_script_timeout_s,
+            )
             grading_stats["duration_s"] = round(time.monotonic() - t_grade, 3)
             phases["grading"] = grading_stats
 
@@ -257,3 +267,12 @@ class BenchmarkRunner:
             return cr
         finally:
             cleanup_workspace(ws)
+
+    def _resolve_test_script(self, tc: TestCase) -> Path | None:
+        """Resolve tc.test_script to an absolute path against testcases_dir."""
+        if not tc.test_script:
+            return None
+        p = Path(tc.test_script)
+        if not p.is_absolute() and self.testcases_dir:
+            p = self.testcases_dir / p
+        return p.resolve()

@@ -40,7 +40,12 @@ class RunStore:
     def save_meta(self, run_dir: Path, meta: dict[str, Any]) -> None:
         _write_json(run_dir / "meta.json", meta)
 
-    def save_eval(self, run_dir: Path, case_id: str, test_case: TestCase) -> None:
+    def save_eval(
+        self, run_dir: Path, case_id: str, test_case: TestCase,
+        *,
+        test_script_path: Path | None = None,
+        test_script_timeout_s: float | None = None,
+    ) -> None:
         cd = self.case_dir(run_dir, case_id)
         data = {
             "id": test_case.id,
@@ -50,6 +55,12 @@ class RunStore:
             "model": test_case.model,
             "tags": test_case.tags,
         }
+        if test_case.test_script is not None:
+            data["test_script"] = test_case.test_script
+        if test_script_path is not None:
+            data["test_script_path"] = str(test_script_path)
+        if test_script_timeout_s is not None:
+            data["test_script_timeout_s"] = test_script_timeout_s
         _write_json(cd / "eval.json", data)
 
     def save_result(self, run_dir: Path, case_id: str, result: CaseResult) -> None:

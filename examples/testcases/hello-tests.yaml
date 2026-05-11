@@ -2,27 +2,22 @@ name: hello-suite-tests
 description: "Basic tests for the simple hello suite"
 default_timeout_s: 60
 
+# All cases below use pytest test_script grading only (no LLM judge calls).
+# See pdf-read-cases-std.yaml for a hybrid example.
+
 test_cases:
   - id: create-hello-file
     description: "Create a simple hello.txt file"
     prompt: |
       Create a file called hello.txt that contains the text "Hello, World!".
-    expectations:
-      - desc: hello.txt exists
-        score: 5
-      - desc: 'hello.txt contains the text "Hello, World!"'
-        score: 10
+    test_script: ./verifiers/test_hello_file.py
 
   - id: create-greeting-json
     description: "Create a JSON greeting file"
     prompt: |
       Create a file called greeting.json with the following structure:
       {"message": "Hello, World!", "language": "en"}
-    expectations:
-      - desc: greeting.json exists
-        score: 5
-      - desc: 'greeting.json is valid JSON containing "message": "Hello, World!" and "language": "en"'
-        score: 10
+    test_script: ./verifiers/test_greeting_json.py
 
   - id: process-input-file
     description: "Read input and produce output"
@@ -30,10 +25,6 @@ test_cases:
       Read names.txt, and for each name create a greeting line.
       Write the result to greetings.txt.
     workspace_files_from: ../hello-input
-    expectations:
-      - desc: greetings.txt exists
-        score: 5
-      - desc: greetings.txt contains a greeting for each name in names.txt (Alice, Bob, Charlie)
-        score: 10
+    test_script: ./verifiers/test_greetings_for_names.py
     tags:
       - with-input
