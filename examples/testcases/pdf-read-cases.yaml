@@ -1,6 +1,7 @@
 name: pdf-reading-compact
 description: "PDF 阅读基准测试 - 紧凑格式"
 default_timeout_s: 300
+default_model: opencode/deepseek-v4-flash-free
 
 test_cases:
   - id: parse-financial-report

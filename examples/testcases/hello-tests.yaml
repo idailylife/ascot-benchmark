@@ -1,6 +1,7 @@
 name: hello-suite-tests
 description: "Basic tests for the simple hello suite"
 default_timeout_s: 60
+default_model: opencode/deepseek-v4-flash-free
 
 # All cases below use pytest test_script grading only (no LLM judge calls).
 # See pdf-read-cases-std.yaml for a hybrid example.

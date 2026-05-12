@@ -7,6 +7,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from opencode_wrapper import (
     AsyncOpenCodeClient,
@@ -14,6 +15,7 @@ from opencode_wrapper import (
     RunConfig,
     RunResult,
 )
+from opencode_wrapper.config import loads_jsonc
 
 from .graders import error_result, grade_case
 from .models import BenchmarkReport, CaseResult, TestCase, TestSuite, aggregate_trials
@@ -24,7 +26,7 @@ log = logging.getLogger(__name__)
 
 # Default permissions: allow all tools, deny non-interactive / safety risks.
 # Users can override individual keys in their suite's opencode.json.
-DEFAULT_PERMISSION: dict[str, str] = {
+DEFAULT_PERMISSION: dict[str, Any] = {
     "*": "allow",
     "question": "deny",
     "external_directory": "deny",
@@ -32,35 +34,23 @@ DEFAULT_PERMISSION: dict[str, str] = {
 }
 
 
-def _load_suite_permission(suite_dir: Path) -> dict[str, str]:
+def _load_suite_permission(suite_dir: Path) -> dict[str, Any]:
     """Read user permission overrides from the suite's opencode.json."""
     for name in ("opencode.json", "opencode.jsonc"):
         cfg_path = suite_dir / name
         if cfg_path.exists():
-            import json
             try:
                 with open(cfg_path) as f:
-                    data = json.loads(
-                        # Strip JSONC comments (// and /* */) for .jsonc
-                        _strip_jsonc_comments(f.read())
-                    )
+                    data = loads_jsonc(f.read())
+                if not isinstance(data, dict):
+                    return {}
                 return data.get("permission", {})
-            except (json.JSONDecodeError, OSError):
+            except (ValueError, OSError):
                 pass
     return {}
 
 
-def _strip_jsonc_comments(text: str) -> str:
-    """Minimal JSONC comment stripper for // and /* */ comments."""
-    import re
-    # Remove single-line comments
-    text = re.sub(r'//.*?$', '', text, flags=re.MULTILINE)
-    # Remove multi-line comments
-    text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
-    return text
-
-
-def build_permission(suite_dir: Path) -> dict[str, str]:
+def build_permission(suite_dir: Path) -> dict[str, Any]:
     """Merge default permissions with user overrides from suite config.
 
     Default provides a safe base; user's suite opencode.json can override
@@ -112,6 +102,7 @@ class BenchmarkRunner:
         testcases_dir: Path | None = None,
         venv: Path | None = None,
         trials: int = 1,
+        inherit_user_config: bool = False,
     ):
         self.suite_dir = suite_dir
         self.test_suite = test_suite
@@ -123,6 +114,7 @@ class BenchmarkRunner:
         self.permission = build_permission(suite_dir)
         self.venv = venv
         self.trials = trials
+        self.inherit_user_config = inherit_user_config
 
         self.client = AsyncOpenCodeClient(
             binary=binary,
@@ -143,6 +135,7 @@ class BenchmarkRunner:
             "model": self.model,
             "concurrency": self.concurrency,
             "trials": self.trials,
+            "inherit_user_config": self.inherit_user_config,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "total_cases": len(self.test_suite.test_cases),
         })
@@ -209,6 +202,7 @@ class BenchmarkRunner:
                 agent=tc.agent,
                 permission=self.permission,
                 extra_env=extra_env,
+                inherit_user_config=self.inherit_user_config,
             )
             trial_d = self.store.trial_dir(self.run_dir, tc.id, trial_num)
             events_path = trial_d / "events.jsonl"
@@ -246,6 +240,7 @@ class BenchmarkRunner:
                 grading_model=self.grading_model,
                 test_script_path=ts_path,
                 test_script_timeout_s=self.test_suite.default_test_script_timeout_s,
+                inherit_user_config=self.inherit_user_config,
             )
             grading_stats["duration_s"] = round(time.monotonic() - t_grade, 3)
             phases["grading"] = grading_stats

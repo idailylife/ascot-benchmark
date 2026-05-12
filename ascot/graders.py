@@ -69,6 +69,7 @@ async def llm_judge(
     test_case: TestCase,
     client: "AsyncOpenCodeClient",
     grading_model: str | None = None,
+    inherit_user_config: bool = False,
 ) -> tuple[list[ExpectationResult], dict]:
     """Run an OpenCode session to judge output against all expectations.
 
@@ -137,7 +138,11 @@ async def llm_judge(
         )
 
         prompt = "\n".join(sections)
-        cfg = RunConfig(model=grading_model, permission=JUDGE_PERMISSION)
+        cfg = RunConfig(
+            model=grading_model,
+            permission=JUDGE_PERMISSION,
+            inherit_user_config=inherit_user_config,
+        )
         result = await client.async_run(
             prompt, str(judge_ws), run_cfg=cfg, timeout_s=300,
         )
@@ -335,6 +340,7 @@ async def grade_case(
     grading_model: str | None = None,
     test_script_path: Path | None = None,
     test_script_timeout_s: float = 60.0,
+    inherit_user_config: bool = False,
 ) -> tuple[CaseResult, dict]:
     """Grade a test case via test_script (deterministic) and/or LLM judge.
 
@@ -365,6 +371,7 @@ async def grade_case(
     if test_case.expectations:
         judge_results, grading_stats = await llm_judge(
             case_dir, test_case, client, grading_model=grading_model,
+            inherit_user_config=inherit_user_config,
         )
         expectation_results.extend(judge_results)
 
@@ -402,6 +409,7 @@ async def regrade_run(
     client: "AsyncOpenCodeClient",
     concurrency: int = 4,
     grading_model: str | None = None,
+    inherit_user_config: bool = False,
 ) -> "BenchmarkReport":
     """Re-grade all cases in an existing run with concurrency.
 
@@ -486,6 +494,7 @@ async def regrade_run(
                 grading_model=grading_model,
                 test_script_path=ts_path,
                 test_script_timeout_s=ts_timeout,
+                inherit_user_config=inherit_user_config,
             )
             # Preserve original agent metrics
             cr.turns = result_data.get("turns", 0)
@@ -649,6 +658,7 @@ async def review_case(
     trial_results: list[CaseResult],
     client: "AsyncOpenCodeClient",
     model: str | None = None,
+    inherit_user_config: bool = False,
 ) -> str:
     """Run a review agent to diagnose why a case failed.
 
@@ -662,7 +672,11 @@ async def review_case(
     review_ws = _setup_review_workspace(case_dir, trial_results)
     try:
         prompt = _build_review_prompt(test_case, trial_results)
-        cfg = RunConfig(model=model, permission=JUDGE_PERMISSION)
+        cfg = RunConfig(
+            model=model,
+            permission=JUDGE_PERMISSION,
+            inherit_user_config=inherit_user_config,
+        )
         result = await client.async_run(
             prompt, str(review_ws), run_cfg=cfg, timeout_s=300,
         )

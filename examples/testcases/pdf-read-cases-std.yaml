@@ -1,6 +1,7 @@
 name: pdf-reading
 description: "PDF 阅读 suite 基准测试 - 财务研报解析（逐项拆分，混合 grading）"
 default_timeout_s: 300
+default_model: opencode/deepseek-v4-flash-free
 # Each case below combines deterministic test_script grading (file existence,
 # page count exact match) with LLM-judged expectations for fuzzy semantic
 # content (title parsing, table content, formula equivalence).

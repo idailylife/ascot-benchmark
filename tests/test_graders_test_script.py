@@ -69,8 +69,12 @@ class TestGradeCaseTestScript:
 
         called = {"judge": 0}
 
-        async def fake_judge(case_dir, test_case, client, grading_model=None):
+        async def fake_judge(
+            case_dir, test_case, client, grading_model=None,
+            inherit_user_config=False,
+        ):
             called["judge"] += 1
+            assert inherit_user_config is False
             results = [
                 ExpectationResult(desc=e.desc, score=e.score, earned=e.score,
                                   reasoning="judged")
@@ -98,7 +102,10 @@ class TestGradeCaseTestScript:
         script = _write(tmp_path / "test_x.py",
                         "def test_obj():\n    assert True\n")
 
-        async def fake_judge(case_dir, test_case, client, grading_model=None):
+        async def fake_judge(
+            case_dir, test_case, client, grading_model=None,
+            inherit_user_config=False,
+        ):
             return [
                 ExpectationResult(desc=e.desc, score=e.score, earned=0,
                                   reasoning="failed")
@@ -122,6 +129,32 @@ class TestGradeCaseTestScript:
         # 1 (pytest) + 5 (judge max) = 6
         assert cr.max_score == 6
         assert stats["cost"] == 0.5
+
+    async def test_inherit_user_config_forwarded_to_judge(self, tmp_path, monkeypatch):
+        case_dir = _make_case_dir_with_ws(tmp_path)
+        seen = {"inherit": None}
+
+        async def fake_judge(
+            case_dir, test_case, client, grading_model=None,
+            inherit_user_config=False,
+        ):
+            seen["inherit"] = inherit_user_config
+            return [
+                ExpectationResult(desc=e.desc, score=e.score, earned=e.score,
+                                  reasoning="judged")
+                for e in test_case.expectations
+            ], {"tokens": {}, "cost": 0.0, "turns": 1}
+
+        monkeypatch.setattr("ascot.graders.llm_judge", fake_judge)
+
+        tc = TestCase(id="c1", prompt="x",
+                      expectations=[Expectation(desc="fuzzy", score=1)])
+        await grade_case(
+            tc, case_dir, _fake_run_result(), 1.0, client=None,
+            inherit_user_config=True,
+        )
+
+        assert seen["inherit"] is True
 
     async def test_no_expectations_no_test_script(self, tmp_path, monkeypatch):
         """Empty case: no judge, no verifier, zero score."""

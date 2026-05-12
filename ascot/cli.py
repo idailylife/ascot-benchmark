@@ -35,6 +35,7 @@ def main(argv: list[str] | None = None) -> None:
     run_p.add_argument("--show-cost", action="store_true", help="Show cost in report")
     run_p.add_argument("--venv", help="Path to pre-configured virtual environment")
     run_p.add_argument("--trials", "-n", type=int, default=3, help="Number of times to run each test case (default: 3)")
+    run_p.add_argument("--inherit-user-config", action="store_true", help="Inherit global OpenCode config instead of wrapper-isolated config")
     run_p.add_argument("--format", "-f", choices=["terminal", "json"], default="terminal")
 
     # --- grade ---
@@ -43,12 +44,14 @@ def main(argv: list[str] | None = None) -> None:
     grade_p.add_argument("--binary", default="opencode", help="OpenCode binary path")
     grade_p.add_argument("--concurrency", "-c", type=int, default=4, help="Parallel grading limit")
     grade_p.add_argument("--grading-model", help="Override model for judge")
+    grade_p.add_argument("--inherit-user-config", action="store_true", help="Inherit global OpenCode config instead of wrapper-isolated config")
 
     # --- review ---
     review_p = subparsers.add_parser("review", help="Analyze failed cases from an existing run")
     review_p.add_argument("run_dir", help="Path to run output directory")
     review_p.add_argument("--binary", default="opencode", help="OpenCode binary path")
     review_p.add_argument("--model", help="Model for review agent")
+    review_p.add_argument("--inherit-user-config", action="store_true", help="Inherit global OpenCode config instead of wrapper-isolated config")
 
     # --- report ---
     report_p = subparsers.add_parser("report", help="Generate report from existing run")
@@ -125,6 +128,7 @@ async def _cmd_run(args: argparse.Namespace) -> None:
         testcases_dir=testcases_dir,
         venv=venv_path,
         trials=args.trials,
+        inherit_user_config=args.inherit_user_config,
     )
 
     trial_info = f" x {args.trials} trials" if args.trials > 1 else ""
@@ -159,6 +163,7 @@ async def _cmd_grade(args: argparse.Namespace) -> None:
         run_dir, client,
         concurrency=args.concurrency,
         grading_model=getattr(args, "grading_model", None),
+        inherit_user_config=args.inherit_user_config,
     )
 
     print(format_terminal(report))
@@ -239,6 +244,7 @@ async def _cmd_review(args: argparse.Namespace) -> None:
         print(f"Reviewing case: {tc.id} ...")
         review_text = await review_case(
             tc, case_dir, trial_results, client, model=args.model,
+            inherit_user_config=args.inherit_user_config,
         )
         review_path = case_dir / "review.md"
         review_path.write_text(review_text, encoding="utf-8")

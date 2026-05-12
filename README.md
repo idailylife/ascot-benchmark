@@ -90,7 +90,7 @@ YAML files defining what to test. A single file can contain multiple cases:
 name: doc-generation
 description: "Document generation suite benchmark"
 default_timeout_s: 180
-default_model: anthropic/claude-sonnet-4-20250514
+default_model: opencode/deepseek-v4-flash-free
 grading_model: null                               # optional, model for LLM judge (defaults to default_model)
 default_workspace_files_from: fixtures/shared  # optional, inherited by all cases
 
@@ -193,6 +193,7 @@ python -m ascot run <suite_dir> <testcases> [options]
 | `-n, --trials` | 3 | Number of times to run each test case |
 | `--binary` | `opencode` | Path to OpenCode binary |
 | `--venv` | none | Path to pre-configured virtual environment |
+| `--inherit-user-config` | off | Inherit global OpenCode config instead of wrapper-isolated config |
 | `--tag` | all | Only run cases matching tag (repeatable) |
 | `--show-cost` | off | Show cost column in report |
 | `-f, --format` | `terminal` | Output format: `terminal` or `json` |
@@ -206,19 +207,23 @@ Re-run LLM judge grading on a previous run (e.g. after updating expectations):
 python -m ascot grade ./benchmark/run-001
 ```
 
+Use `--inherit-user-config` if the judge should inherit your global OpenCode
+config instead of the wrapper's isolated config.
+
 ### `ascot review`
 
 Analyze failed cases from an existing run. A diagnostic LLM agent reads each failed case's events and outputs across all trials, compares successful vs failed trials, and writes a markdown report:
 
 ```bash
 python -m ascot review ./benchmark/run-001
-python -m ascot review ./benchmark/run-001 --model anthropic/claude-sonnet-4-20250514
+python -m ascot review ./benchmark/run-001 --model opencode/deepseek-v4-flash-free
 ```
 
 | Flag | Default | Description |
 |---|---|---|
 | `--binary` | `opencode` | Path to OpenCode binary |
 | `--model` | opencode default | Model for the review agent |
+| `--inherit-user-config` | off | Inherit global OpenCode config instead of wrapper-isolated config |
 
 Results are saved to `<case_dir>/review.md`. Cases where all trials passed are skipped.
 
@@ -360,3 +365,17 @@ To override, add `permission` in your suite's `opencode.json`. User overrides ar
   }
 }
 ```
+
+## OpenCode Config Isolation
+
+Ascot uses `py-opencode-wrapper>=0.2.1`, whose default is to isolate global
+OpenCode config for reproducible subprocess runs. Provider selection and
+`opencode auth` credentials still work, and the suite's project-level
+`.opencode/` config is still loaded from the workspace. Global capability
+settings such as `mcp`, `agent`, `command`, `tools`, `plugin`, `skills`,
+`instructions`, `permission`, and `model` are not inherited unless you pass
+`--inherit-user-config`.
+
+For benchmark runs, prefer putting required skills, instructions, MCP servers,
+and permissions in the suite's `opencode.json`, and set `default_model` or
+`--model` explicitly when model choice matters.

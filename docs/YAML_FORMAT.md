@@ -6,7 +6,7 @@
 name: <suite-name>
 description: "<description>"
 default_timeout_s: 300
-default_model: null          # optional model override
+default_model: opencode/deepseek-v4-flash-free  # optional model override
 grading_model: null          # optional, model for LLM judge (defaults to default_model)
 default_workspace_files_from: null  # optional, inherited by all cases
 default_test_script_timeout_s: 60   # optional, default 60s for every test_script
@@ -36,7 +36,7 @@ test_cases:
 | `name` | yes | Suite name |
 | `description` | no | Suite description |
 | `default_timeout_s` | no | Default timeout in seconds for all cases (default: 600) |
-| `default_model` | no | Default model for agent runs; also used as grading model if `grading_model` is not set |
+| `default_model` | no | Default model for agent runs; also used as grading model if `grading_model` is not set. Recommended because global OpenCode `model` is isolated by default. |
 | `grading_model` | no | Model for the LLM judge; takes priority over `default_model` |
 | `default_workspace_files_from` | no | Default workspace files directory, inherited by all cases |
 | `default_test_script_timeout_s` | no | Timeout in seconds for every `test_script` invocation (default: 60) |
@@ -137,4 +137,3 @@ def test_page_count_value():
 ```
 
 The `page-count` case scores 2 (pytest) + 3 (judge) = 5 max; `title-extraction` is pure LLM-judge at 10 max.
-
