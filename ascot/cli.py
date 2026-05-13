@@ -25,7 +25,7 @@ def main(argv: list[str] | None = None) -> None:
     # --- run ---
     run_p = subparsers.add_parser("run", help="Run benchmark suite")
     run_p.add_argument("suite_dir", help="Path to suite directory")
-    run_p.add_argument("testcases", help="Path to test cases YAML file or directory")
+    run_p.add_argument("testcases", help="Path to test cases YAML file")
     run_p.add_argument("--output", "-o", default="./benchmark", help="Output directory")
     run_p.add_argument("--model", "-m", help="Override model for all cases")
     run_p.add_argument("--concurrency", "-c", type=int, default=4, help="Parallel case limit")

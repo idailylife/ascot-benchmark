@@ -94,13 +94,13 @@ class TestLoadTestSuite:
         assert suite.test_cases[1].model == "gpt-3"
         assert suite.test_cases[1].workspace_files_from == "../other"
 
-    def test_directory_single_file(self, tmp_dir):
+    def test_directory_single_file_raises(self, tmp_dir):
         data = {"name": "dir-suite", "test_cases": [{"id": "c1", "prompt": "x"}]}
         self._write_yaml(tmp_dir / "cases.yaml", data)
-        suite = load_test_suite(tmp_dir)
-        assert suite.name == "dir-suite"
+        with pytest.raises(ValueError, match="not a directory"):
+            load_test_suite(tmp_dir)
 
-    def test_directory_multiple_files(self, tmp_dir):
+    def test_directory_multiple_files_raises(self, tmp_dir):
         self._write_yaml(tmp_dir / "a.yaml", {
             "name": "suite-a",
             "test_cases": [{"id": "a1", "prompt": "x"}],
@@ -109,14 +109,18 @@ class TestLoadTestSuite:
             "name": "suite-b",
             "test_cases": [{"id": "b1", "prompt": "y"}],
         })
-        suite = load_test_suite(tmp_dir)
-        assert len(suite.test_cases) == 2
-        ids = {tc.id for tc in suite.test_cases}
-        assert ids == {"a1", "b1"}
+        with pytest.raises(ValueError, match="not a directory"):
+            load_test_suite(tmp_dir)
 
     def test_empty_directory_raises(self, tmp_dir):
-        with pytest.raises(ValueError, match="No YAML files"):
+        with pytest.raises(ValueError, match="not a directory"):
             load_test_suite(tmp_dir)
+
+    def test_non_yaml_file_raises(self, tmp_dir):
+        p = tmp_dir / "tests.json"
+        p.write_text("{}", encoding="utf-8")
+        with pytest.raises(ValueError, match="YAML file"):
+            load_test_suite(p)
 
     def test_nonexistent_path_raises(self, tmp_dir):
         with pytest.raises(ValueError, match="does not exist"):

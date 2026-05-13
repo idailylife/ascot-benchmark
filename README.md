@@ -184,6 +184,8 @@ Grading is strictly outcome-based: if the agent did extensive work but didn't pr
 python -m ascot run <suite_dir> <testcases> [options]
 ```
 
+`<testcases>` must be a single `.yaml` or `.yml` file.
+
 | Flag | Default | Description |
 |---|---|---|
 | `-o, --output` | `./benchmark` | Output directory for results |

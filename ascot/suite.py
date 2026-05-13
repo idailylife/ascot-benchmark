@@ -61,31 +61,17 @@ def _load_yaml_file(path: Path) -> dict[str, Any]:
 
 
 def load_test_suite(path: str | Path) -> TestSuite:
-    """Load a TestSuite from a YAML file or a directory of YAML files.
-
-    Single file: parsed as one suite definition.
-    Directory: all .yaml/.yml files merged into one suite.
-    """
+    """Load a TestSuite from a YAML file."""
     p = Path(path).resolve()
 
     if p.is_file():
+        if p.suffix not in {".yaml", ".yml"}:
+            raise ValueError(f"Test cases must be a YAML file (.yaml or .yml): {p}")
         data = _load_yaml_file(p)
         return _build_suite(data)
 
     if p.is_dir():
-        yamls = sorted(p.glob("*.yaml")) + sorted(p.glob("*.yml"))
-        if not yamls:
-            raise ValueError(f"No YAML files found in: {p}")
-        if len(yamls) == 1:
-            return _build_suite(_load_yaml_file(yamls[0]))
-        # Merge multiple YAML files into one suite
-        all_cases: list[dict[str, Any]] = []
-        suite_name = p.name
-        for yf in yamls:
-            data = _load_yaml_file(yf)
-            suite_name = data.get("name", suite_name)
-            all_cases.extend(data.get("test_cases", []))
-        return _build_suite({"name": suite_name, "test_cases": all_cases})
+        raise ValueError(f"Test cases must be a YAML file, not a directory: {p}")
 
     raise ValueError(f"Test cases path does not exist: {p}")
 
