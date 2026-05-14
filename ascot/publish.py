@@ -261,7 +261,7 @@ def _import_pymysql() -> Any:
         import pymysql  # type: ignore[import-not-found]
     except ImportError:
         raise PublishError(
-            'MySQL publish requires the optional dependency. Install with: pip install "ascot[mysql]"'
+            "MySQL publish requires pymysql. Reinstall ascot or run: pip install pymysql"
         ) from None
     return pymysql
 

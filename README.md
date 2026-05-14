@@ -12,12 +12,6 @@ pip install -e .
 
 Requires `opencode` CLI on PATH. See [OpenCode docs](https://opencode.ai/docs/).
 
-MySQL publishing is optional:
-
-```bash
-pip install -e ".[mysql]"
-```
-
 See [MySQL Publish for Grafana](docs/MYSQL_PUBLISH.md) for setup and Grafana queries.
 
 ## Quick Start
@@ -258,11 +252,7 @@ python -m ascot inspect ./benchmark/run-001/create-report/trial-1 -f json
 ### `ascot init-publish` / `ascot publish`
 
 Publish aggregated benchmark results to MySQL for Grafana dashboards. This
-requires the optional MySQL dependency:
-
-```bash
-pip install -e ".[mysql]"
-```
+requires MySQL server access; the Python MySQL driver is installed with Ascot.
 
 Initialize the schema once:
 

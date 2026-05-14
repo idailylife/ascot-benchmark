@@ -1,22 +1,20 @@
 # MySQL Publish for Grafana
 
-Ascot can publish aggregated benchmark results to MySQL so Grafana can show score, cost, token, and duration trends. This is optional and only stores key run/case metrics; detailed trial and expectation evidence stays in the local `benchmark/run-xxx/` files.
+Ascot can publish aggregated benchmark results to MySQL so Grafana can show score, cost, token, and duration trends. It only stores key run/case metrics; detailed trial and expectation evidence stays in the local `benchmark/run-xxx/` files.
 
 ## Install
 
-MySQL publishing requires the optional dependency:
+MySQL publishing is included in the default Ascot install:
 
 ```bash
-pip install "ascot[mysql]"
+pip install ascot
 ```
 
 For local development from this repo:
 
 ```bash
-pip install -e ".[mysql]"
+pip install -e .
 ```
-
-Core commands such as `run`, `report`, `grade`, `review`, and `inspect` do not require this extra.
 
 ## MySQL Setup
 
@@ -191,7 +189,7 @@ SELECT DISTINCT suite_name FROM ascot_runs ORDER BY suite_name
 
 ## Troubleshooting
 
-- `MySQL publish requires the optional dependency`: install `ascot[mysql]`.
+- `MySQL publish requires pymysql`: reinstall Ascot or run `pip install pymysql`.
 - `Publish tables are missing`: run `ascot init-publish` first.
 - `Missing MySQL configuration`: pass `--config`, set `ASCOT_PUBLISH_CONFIG`, pass `--mysql-url`, or set `ASCOT_MYSQL_URL`.
 - Authentication succeeds with `mysql` CLI but fails in Ascot: check whether the MySQL user is scoped to `localhost` versus `%`, and whether Ascot is connecting to the same host.
