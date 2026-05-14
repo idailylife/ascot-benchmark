@@ -249,13 +249,7 @@ async def _cmd_review(args: argparse.Namespace) -> None:
         if not trial_results:
             continue
 
-        # Check if any expectation scored 0
-        has_failure = any(
-            er.earned == 0
-            for tr in trial_results
-            for er in tr.expectation_results
-        )
-        if not has_failure:
+        if not _case_needs_review(trial_results):
             print(f"Skipping case: {tc.id} (all trials passed)")
             skipped += 1
             continue
@@ -354,6 +348,16 @@ def _reconstruct_case_result(r: dict) -> "CaseResult":
         error=r.get("error"),
         num_trials=r.get("num_trials", 1),
         trial_results=trial_results,
+    )
+
+
+def _case_needs_review(trial_results: list["CaseResult"]) -> bool:
+    """Return True when any trial failed, errored, or lost score."""
+    return any(
+        tr.error
+        or tr.score < tr.max_score
+        or any(er.earned == 0 for er in tr.expectation_results)
+        for tr in trial_results
     )
 
 
