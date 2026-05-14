@@ -12,6 +12,14 @@ pip install -e .
 
 Requires `opencode` CLI on PATH. See [OpenCode docs](https://opencode.ai/docs/).
 
+MySQL publishing is optional:
+
+```bash
+pip install -e ".[mysql]"
+```
+
+See [MySQL Publish for Grafana](docs/MYSQL_PUBLISH.md) for setup and Grafana queries.
+
 ## Quick Start
 
 ```bash
@@ -245,6 +253,83 @@ Analyze a single case's execution for performance debugging. Shows per-step reas
 ```bash
 python -m ascot inspect ./benchmark/run-001/create-report/trial-1
 python -m ascot inspect ./benchmark/run-001/create-report/trial-1 -f json
+```
+
+### `ascot init-publish` / `ascot publish`
+
+Publish aggregated benchmark results to MySQL for Grafana dashboards. This
+requires the optional MySQL dependency:
+
+```bash
+pip install -e ".[mysql]"
+```
+
+Initialize the schema once:
+
+```bash
+ascot init-publish --mysql-url mysql://user:pass@localhost:3306/ascot
+```
+
+Publish an existing run:
+
+```bash
+ascot publish ./benchmark/run-001 --mysql-url mysql://user:pass@localhost:3306/ascot
+```
+
+You can also set `ASCOT_MYSQL_URL` instead of passing `--mysql-url`.
+
+For credentials with special characters, a YAML config avoids URL encoding:
+
+```yaml
+mysql:
+  host: localhost
+  port: 3306
+  user: admin_user
+  password: admAdmin!!!
+  database: ascot
+```
+
+Use it with either command:
+
+```bash
+ascot init-publish --config ascot-publish.yaml
+ascot publish ./benchmark/run-001 --config ascot-publish.yaml
+```
+
+You can also set `ASCOT_PUBLISH_CONFIG` to the config path.
+
+For database setup, permissions, schema details, and more Grafana queries, see
+[MySQL Publish for Grafana](docs/MYSQL_PUBLISH.md).
+
+Grafana can query the two publish tables through its MySQL data source. Example
+score trend:
+
+```sql
+SELECT
+  $__time(run_timestamp),
+  score_pct
+FROM ascot_runs
+WHERE $__timeFilter(run_timestamp)
+  AND suite_name = '$suite'
+ORDER BY run_timestamp
+```
+
+Example failing cases table:
+
+```sql
+SELECT
+  r.run_timestamp,
+  r.suite_name,
+  r.run_id,
+  c.case_id,
+  c.score,
+  c.max_score,
+  c.error,
+  r.source_path
+FROM ascot_case_results c
+JOIN ascot_runs r ON r.id = c.run_db_id
+WHERE (c.passed = 0 OR c.error IS NOT NULL)
+ORDER BY r.run_timestamp DESC
 ```
 
 ## Output Structure

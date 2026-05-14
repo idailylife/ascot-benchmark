@@ -65,6 +65,21 @@ def main(argv: list[str] | None = None) -> None:
     inspect_p.add_argument("--format", "-f", choices=["terminal", "json"], default="terminal")
     inspect_p.add_argument("--show-cost", action="store_true", help="Show cost in report")
 
+    # --- init-publish ---
+    init_publish_p = subparsers.add_parser(
+        "init-publish",
+        aliases=["init_publish"],
+        help="Initialize MySQL tables for publishing results",
+    )
+    init_publish_p.add_argument("--mysql-url", help="MySQL DSN, or set ASCOT_MYSQL_URL")
+    init_publish_p.add_argument("--config", help="Path to publish YAML config")
+
+    # --- publish ---
+    publish_p = subparsers.add_parser("publish", help="Publish an existing run to MySQL")
+    publish_p.add_argument("run_dir", help="Path to run output directory")
+    publish_p.add_argument("--mysql-url", help="MySQL DSN, or set ASCOT_MYSQL_URL")
+    publish_p.add_argument("--config", help="Path to publish YAML config")
+
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -83,6 +98,10 @@ def main(argv: list[str] | None = None) -> None:
         _cmd_report(args)
     elif args.command == "inspect":
         _cmd_inspect(args)
+    elif args.command in {"init-publish", "init_publish"}:
+        _cmd_init_publish(args)
+    elif args.command == "publish":
+        _cmd_publish(args)
 
 
 async def _cmd_run(args: argparse.Namespace) -> None:
@@ -353,3 +372,33 @@ def _cmd_inspect(args: argparse.Namespace) -> None:
         print(format_trace_json(trace))
     else:
         print(format_trace_terminal(trace, show_cost=args.show_cost))
+
+
+def _cmd_init_publish(args: argparse.Namespace) -> None:
+    """Initialize MySQL tables for publishing results."""
+    from .publish import PublishError, init_publish_schema
+
+    try:
+        init_publish_schema(args.mysql_url, config_path=args.config)
+    except PublishError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Could not initialize publish tables: {e}", file=sys.stderr)
+        sys.exit(1)
+    print("Initialized Ascot publish tables.")
+
+
+def _cmd_publish(args: argparse.Namespace) -> None:
+    """Publish an existing run to MySQL."""
+    from .publish import PublishError, publish_run
+
+    try:
+        summary = publish_run(args.run_dir, args.mysql_url, config_path=args.config)
+    except PublishError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Could not publish run: {e}", file=sys.stderr)
+        sys.exit(1)
+    print(f"Published {summary['run_id']}: {summary['case_count']} cases to MySQL.")
