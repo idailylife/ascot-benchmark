@@ -2,7 +2,7 @@
 
 import json
 
-from ascot.runner import build_permission
+from ascot.runner import _preserve_workspace_best_effort, build_permission
 
 
 def test_build_permission_reads_json_with_schema_url(tmp_path):
@@ -40,3 +40,26 @@ def test_build_permission_reads_jsonc_and_nested_permission(tmp_path):
 
     assert permission["question"] == "deny"
     assert permission["external_directory"] == {"/tmp/fixtures/**": "allow"}
+
+
+def test_preserve_workspace_best_effort_returns_duration(tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "out.txt").write_text("ok")
+    dest = tmp_path / "dest"
+
+    duration = _preserve_workspace_best_effort(ws, dest)
+
+    assert duration is not None
+    assert (dest / "out.txt").read_text() == "ok"
+
+
+def test_preserve_workspace_best_effort_swallows_errors(monkeypatch, tmp_path):
+    def boom(ws, dest):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("ascot.runner.preserve_workspace", boom)
+
+    duration = _preserve_workspace_best_effort(tmp_path / "ws", tmp_path / "dest")
+
+    assert duration is None

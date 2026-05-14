@@ -87,6 +87,17 @@ def build_report(
     )
 
 
+def _preserve_workspace_best_effort(ws: Path, dest: Path) -> float | None:
+    """Preserve workspace output, logging and continuing on failure."""
+    t_pres = time.monotonic()
+    try:
+        preserve_workspace(ws, dest)
+    except Exception as e:
+        log.warning("Could not preserve workspace %s to %s: %s", ws, dest, e)
+        return None
+    return round(time.monotonic() - t_pres, 3)
+
+
 class BenchmarkRunner:
     """Runs a test suite against a suite configuration via OpenCode."""
 
@@ -256,6 +267,11 @@ class BenchmarkRunner:
 
         except OpenCodeError as e:
             log.error("Case %s trial %d error: %s", tc.id, trial_num, e)
+            trial_d = self.store.trial_dir(self.run_dir, tc.id, trial_num)
+            if "workspace_preserve" not in phases:
+                pres_s = _preserve_workspace_best_effort(ws, trial_d / "workspace")
+                if pres_s is not None:
+                    phases["workspace_preserve"] = {"duration_s": pres_s}
             cr = error_result(tc.id, e, tc)
             cr.phases = phases
             self.store.save_trial_result(self.run_dir, tc.id, trial_num, cr)
