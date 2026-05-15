@@ -31,6 +31,28 @@ JUDGE_PERMISSION: dict[str, str] = {
 }
 
 
+def _copy_events_without_reasoning(src: Path, dest: Path) -> None:
+    """Copy events.jsonl, dropping `type: "reasoning"` lines.
+
+    The judge doesn't need the agent's thinking trace; stripping it keeps
+    judge context small. The full file (with reasoning) stays in the trial
+    dir for `ascot review` and post-hoc analysis.
+    """
+    with open(src) as fin, open(dest, "w") as fout:
+        for line in fin:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                ev = json.loads(stripped)
+            except json.JSONDecodeError:
+                fout.write(line)
+                continue
+            if isinstance(ev, dict) and ev.get("type") == "reasoning":
+                continue
+            fout.write(line)
+
+
 def _setup_judge_workspace(case_dir: Path) -> Path:
     """Create an isolated workspace for the judge with case artifacts."""
     judge_ws = Path(tempfile.mkdtemp(prefix="ascot_judge_"))
@@ -40,10 +62,10 @@ def _setup_judge_workspace(case_dir: Path) -> Path:
     if ws_src.is_dir():
         shutil.copytree(ws_src, judge_ws / "output")
 
-    # Copy events log
+    # Copy events log, stripping reasoning parts the judge doesn't need
     events_src = case_dir / "events.jsonl"
     if events_src.exists():
-        shutil.copy2(events_src, judge_ws / "events.jsonl")
+        _copy_events_without_reasoning(events_src, judge_ws / "events.jsonl")
 
     return judge_ws
 
@@ -98,9 +120,10 @@ async def llm_judge(
             "meets EACH of the following expectations.\n",
             f"## Expectations\n{exp_list}\n",
             "## Available Evidence\n"
-            "- `events.jsonl`: The agent's complete execution log (JSON lines). "
-            "Each line is an event showing the agent's reasoning, tool calls, "
-            "and outputs. Read this file to understand what the agent did.\n"
+            "- `events.jsonl`: The agent's execution log (JSON lines) — "
+            "tool calls, intermediate outputs, and the final response. "
+            "(The agent's internal thinking is stripped; you don't need it "
+            "to grade.) Read this file to understand what the agent did.\n"
             "- `output/`: Directory containing all files the agent produced. "
             "Inspect these files to verify the agent's work.\n",
         ]
@@ -633,6 +656,12 @@ def _build_review_prompt(
             f"- `trial-{i}/output/`: Files produced by the agent in trial {i}"
         )
     sections.append("")
+    sections.append(
+        "Each `events.jsonl` includes `type: \"reasoning\"` entries capturing "
+        "the agent's internal thinking before tool calls and final answers. "
+        "Read these to understand *why* the agent made each decision — they "
+        "often reveal the root cause more directly than the tool calls alone.\n"
+    )
 
     if has_mixed:
         sections.append(

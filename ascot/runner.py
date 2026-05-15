@@ -214,6 +214,7 @@ class BenchmarkRunner:
                 permission=self.permission,
                 extra_env=extra_env,
                 inherit_user_config=self.inherit_user_config,
+                record_thinking=True,
             )
             trial_d = self.store.trial_dir(self.run_dir, tc.id, trial_num)
             events_path = trial_d / "events.jsonl"
