@@ -7,8 +7,9 @@ import json
 import pytest
 
 from ascot.publish import (
-    CREATE_CASES_TABLE,
     CREATE_RUNS_TABLE,
+    CREATE_TRIALS_TABLE,
+    MIGRATIONS,
     PublishError,
     _parse_mysql_url,
     _resolve_connect_kwargs,
@@ -21,6 +22,7 @@ from ascot.publish import (
 class FakeCursor:
     def __init__(self, conn):
         self.conn = conn
+        self._fetchall_result: list = []
 
     def __enter__(self):
         return self
@@ -32,19 +34,37 @@ class FakeCursor:
         self.conn.executed.append((sql, params))
         if self.conn.raise_on_execute:
             raise self.conn.raise_on_execute
+        if "FROM ascot_schema_version" in sql and "SELECT" in sql.upper():
+            self._fetchall_result = [(v,) for v in sorted(self.conn.applied_versions)]
+        else:
+            self._fetchall_result = []
+        if sql.lstrip().upper().startswith("INSERT INTO ASCOT_SCHEMA_VERSION") and params:
+            self.conn.applied_versions.add(params[0])
 
     def fetchone(self):
         return self.conn.fetchone_value
 
+    def fetchall(self):
+        return list(self._fetchall_result)
+
 
 class FakeConnection:
-    def __init__(self, *, fetchone_value=(42,), raise_on_execute=None):
-        self.executed = []
+    def __init__(
+        self,
+        *,
+        fetchone_value=(42,),
+        raise_on_execute=None,
+        applied_versions: set[int] | None = None,
+    ):
+        self.executed: list = []
         self.fetchone_value = fetchone_value
         self.raise_on_execute = raise_on_execute
         self.committed = False
         self.rolled_back = False
         self.closed = False
+        self.applied_versions: set[int] = (
+            set(applied_versions) if applied_versions else set()
+        )
 
     def cursor(self):
         return FakeCursor(self)
@@ -105,7 +125,40 @@ def _sample_report():
                 "total_cost": 0.1,
                 "error": None,
                 "num_trials": 3,
-                "trial_results": [{"ignored": True}],
+                "trial_results": [
+                    {
+                        "score": 5,
+                        "max_score": 5,
+                        "turns": 2,
+                        "token_usage": {
+                            "total": 40, "input": 25, "output": 15,
+                            "reasoning": 0, "cache_read": 5, "cache_write": 1,
+                        },
+                        "duration_s": 1.5,
+                        "total_cost": 0.03,
+                        "exit_code": 0,
+                        "error": None,
+                    },
+                    {
+                        "score": 5,
+                        "max_score": 5,
+                        "turns": 2,
+                        "token_usage": {"total": 30, "input": 20, "output": 10},
+                        "duration_s": 1.2,
+                        "total_cost": 0.03,
+                        "exit_code": 0,
+                    },
+                    {
+                        "score": 0,
+                        "max_score": 5,
+                        "turns": 3,
+                        "token_usage": {"total": 30},
+                        "duration_s": 1.3,
+                        "total_cost": 0.04,
+                        "exit_code": 1,
+                        "error": "timeout",
+                    },
+                ],
                 "expectation_results": [{"ignored": True}],
             },
             {
@@ -113,6 +166,7 @@ def _sample_report():
                 "score": 0,
                 "max_score": 0,
                 "token_usage": {},
+                "trial_results": [],
             },
         ],
     }
@@ -194,27 +248,72 @@ mysql:
     assert parsed["database"] == "arg-db"
 
 
-def test_init_publish_schema_executes_tables():
+def test_migrations_are_well_formed():
+    versions = [m[0] for m in MIGRATIONS]
+    assert versions == list(range(1, len(versions) + 1)), (
+        "migration versions must start at 1 and be contiguous"
+    )
+    for _, description, statements in MIGRATIONS:
+        assert description
+        assert statements
+        for sql in statements:
+            assert "IF NOT EXISTS" in sql.upper(), (
+                "migrations must be idempotent; use IF NOT EXISTS"
+            )
+
+
+def test_init_publish_schema_applies_all_pending_migrations():
     conn = FakeConnection()
     connector = FakeConnector(conn)
 
-    init_publish_schema("mysql://user:pass@example.com/ascot", connector=connector)
+    applied = init_publish_schema(
+        "mysql://user:pass@example.com/ascot", connector=connector
+    )
 
     sqls = [sql for sql, _ in conn.executed]
+    assert any("CREATE TABLE IF NOT EXISTS ascot_schema_version" in s for s in sqls)
     assert CREATE_RUNS_TABLE in sqls
-    assert CREATE_CASES_TABLE in sqls
-    assert conn.committed
+    assert CREATE_TRIALS_TABLE in sqls
+
+    version_inserts = [
+        params for sql, params in conn.executed
+        if "INSERT INTO ascot_schema_version" in sql
+    ]
+    assert [p[0] for p in version_inserts] == [m[0] for m in MIGRATIONS]
+    assert applied == [(m[0], m[1]) for m in MIGRATIONS]
     assert conn.closed
 
 
-def test_publish_run_writes_run_and_case_rows(tmp_path):
+def test_init_publish_schema_idempotent_when_up_to_date():
+    conn = FakeConnection(applied_versions={m[0] for m in MIGRATIONS})
+    connector = FakeConnector(conn)
+
+    applied = init_publish_schema(
+        "mysql://user:pass@example.com/ascot", connector=connector
+    )
+
+    assert applied == []
+    table_creates = [
+        sql for sql, _ in conn.executed
+        if sql.lstrip().upper().startswith("CREATE TABLE")
+        and "ascot_schema_version" not in sql
+    ]
+    assert table_creates == []
+
+
+def test_publish_run_writes_run_and_trial_rows(tmp_path):
     run_dir = _write_report(tmp_path, _sample_report())
     conn = FakeConnection()
     connector = FakeConnector(conn)
 
     summary = publish_run(run_dir, "mysql://user:pass@example.com/ascot", connector=connector)
 
-    assert summary == {"suite_name": "suite", "run_id": "run-001", "case_count": 2}
+    assert summary == {
+        "suite_name": "suite",
+        "run_id": "run-001",
+        "case_count": 2,
+        "trial_count": 3,
+    }
     assert conn.committed
     assert conn.closed
 
@@ -222,17 +321,57 @@ def test_publish_run_writes_run_and_case_rows(tmp_path):
     assert len(run_inserts) == 1
     assert run_inserts[0][1][7] == 0.7  # score_pct
 
-    case_inserts = [item for item in conn.executed if "INSERT INTO ascot_case_results" in item[0]]
-    assert len(case_inserts) == 2
-    assert case_inserts[0][1][5] == 1  # passed
-    assert case_inserts[1][1][4] is None  # score_pct with max_score = 0
+    # case_results table no longer exists
+    case_inserts = [
+        item for item in conn.executed if "INSERT INTO ascot_case_results" in item[0]
+    ]
+    assert case_inserts == []
+
+    trial_inserts = [
+        item for item in conn.executed if "INSERT INTO ascot_trial_results" in item[0]
+    ]
+    assert len(trial_inserts) == 3
+    assert [t[1][2] for t in trial_inserts] == [1, 2, 3]
+
+    # First trial: token columns wired correctly.
+    # (run_db_id, case_id, trial_num, score, max_score, score_pct, passed,
+    #  turns, tokens_total, tokens_input, tokens_output, tokens_reasoning,
+    #  tokens_cache_read, tokens_cache_write, duration_s, total_cost,
+    #  exit_code, error)
+    first = trial_inserts[0][1]
+    assert first[1] == "pass-case"
+    assert first[6] == 1   # passed
+    assert first[8] == 40  # tokens_total
+    assert first[9] == 25  # tokens_input
+    assert first[10] == 15 # tokens_output
+    assert first[12] == 5  # tokens_cache_read
+    assert first[13] == 1  # tokens_cache_write
+    assert first[16] == 0  # exit_code
+    assert first[17] is None  # error
+
+    # Third trial: failure -> passed=0, exit_code=1, error set.
+    third = trial_inserts[2][1]
+    assert third[6] == 0
+    assert third[16] == 1
+    assert third[17] == "timeout"
+
+    # Idempotency: prior trial rows for this run are deleted before re-insert.
+    delete_sqls = [
+        sql for sql, _ in conn.executed
+        if sql.startswith("DELETE FROM ascot_trial_results")
+    ]
+    assert len(delete_sqls) == 1
 
 
 def test_publish_run_requires_report_json(tmp_path):
     run_dir = tmp_path / "run-001"
     run_dir.mkdir()
     with pytest.raises(PublishError, match="No report.json"):
-        publish_run(run_dir, "mysql://user:pass@example.com/ascot", connector=FakeConnector(FakeConnection()))
+        publish_run(
+            run_dir,
+            "mysql://user:pass@example.com/ascot",
+            connector=FakeConnector(FakeConnection()),
+        )
 
 
 def test_publish_run_missing_table_suggests_init(tmp_path):

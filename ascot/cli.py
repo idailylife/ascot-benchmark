@@ -69,7 +69,7 @@ def main(argv: list[str] | None = None) -> None:
     init_publish_p = subparsers.add_parser(
         "init-publish",
         aliases=["init_publish"],
-        help="Initialize MySQL tables for publishing results",
+        help="Apply MySQL schema migrations for publishing results (safe to re-run on upgrade)",
     )
     init_publish_p.add_argument("--mysql-url", help="MySQL DSN, or set ASCOT_MYSQL_URL")
     init_publish_p.add_argument("--config", help="Path to publish YAML config")
@@ -379,18 +379,22 @@ def _cmd_inspect(args: argparse.Namespace) -> None:
 
 
 def _cmd_init_publish(args: argparse.Namespace) -> None:
-    """Initialize MySQL tables for publishing results."""
+    """Apply any pending Ascot publish schema migrations."""
     from .publish import PublishError, init_publish_schema
 
     try:
-        init_publish_schema(args.mysql_url, config_path=args.config)
+        applied = init_publish_schema(args.mysql_url, config_path=args.config)
     except PublishError as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)
     except Exception as e:
         print(f"Could not initialize publish tables: {e}", file=sys.stderr)
         sys.exit(1)
-    print("Initialized Ascot publish tables.")
+    if applied:
+        for version, description in applied:
+            print(f"Applied migration v{version}: {description}")
+    else:
+        print("Ascot publish schema is up to date.")
 
 
 def _cmd_publish(args: argparse.Namespace) -> None:
@@ -405,4 +409,7 @@ def _cmd_publish(args: argparse.Namespace) -> None:
     except Exception as e:
         print(f"Could not publish run: {e}", file=sys.stderr)
         sys.exit(1)
-    print(f"Published {summary['run_id']}: {summary['case_count']} cases to MySQL.")
+    print(
+        f"Published {summary['run_id']}: {summary['case_count']} cases, "
+        f"{summary['trial_count']} trials to MySQL."
+    )

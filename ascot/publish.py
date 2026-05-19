@@ -16,6 +16,15 @@ class PublishError(RuntimeError):
     """User-facing publish error."""
 
 
+CREATE_SCHEMA_VERSION_TABLE = """
+CREATE TABLE IF NOT EXISTS ascot_schema_version (
+  version INT NOT NULL PRIMARY KEY,
+  description VARCHAR(255) NOT NULL,
+  applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+"""
+
+
 CREATE_RUNS_TABLE = """
 CREATE TABLE IF NOT EXISTS ascot_runs (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -41,30 +50,45 @@ CREATE TABLE IF NOT EXISTS ascot_runs (
 """
 
 
-CREATE_CASES_TABLE = """
-CREATE TABLE IF NOT EXISTS ascot_case_results (
+CREATE_TRIALS_TABLE = """
+CREATE TABLE IF NOT EXISTS ascot_trial_results (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   run_db_id BIGINT UNSIGNED NOT NULL,
   case_id VARCHAR(255) NOT NULL,
+  trial_num INT NOT NULL,
   score DOUBLE NOT NULL DEFAULT 0,
   max_score DOUBLE NOT NULL DEFAULT 0,
   score_pct DOUBLE NULL,
   passed TINYINT(1) NOT NULL DEFAULT 0,
   turns INT NOT NULL DEFAULT 0,
   tokens_total BIGINT NOT NULL DEFAULT 0,
+  tokens_input BIGINT NOT NULL DEFAULT 0,
+  tokens_output BIGINT NOT NULL DEFAULT 0,
+  tokens_reasoning BIGINT NOT NULL DEFAULT 0,
+  tokens_cache_read BIGINT NOT NULL DEFAULT 0,
+  tokens_cache_write BIGINT NOT NULL DEFAULT 0,
   duration_s DOUBLE NOT NULL DEFAULT 0,
   total_cost DOUBLE NOT NULL DEFAULT 0,
+  exit_code INT NULL,
   error TEXT NULL,
-  num_trials INT NOT NULL DEFAULT 1,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_ascot_case_results_identity (run_db_id, case_id),
-  KEY idx_ascot_case_results_case_id (case_id),
-  CONSTRAINT fk_ascot_case_results_run
+  UNIQUE KEY uq_ascot_trial_results_identity (run_db_id, case_id, trial_num),
+  KEY idx_ascot_trial_results_case_id (case_id),
+  CONSTRAINT fk_ascot_trial_results_run
     FOREIGN KEY (run_db_id) REFERENCES ascot_runs(id)
     ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 """
+
+
+# Ordered schema migrations. Each migration's statements MUST be idempotent
+# (CREATE TABLE IF NOT EXISTS, ALTER TABLE ... IF NOT EXISTS, etc.) so a retry
+# after a partial application is safe. Versions are strictly increasing and
+# never reused or rewritten once released.
+MIGRATIONS: list[tuple[int, str, list[str]]] = [
+    (1, "initial schema (runs + per-trial results)", [CREATE_RUNS_TABLE, CREATE_TRIALS_TABLE]),
+]
 
 
 INSERT_RUN_SQL = """
@@ -94,11 +118,13 @@ WHERE suite_name = %s AND run_id = %s AND run_timestamp = %s
 """
 
 
-INSERT_CASE_SQL = """
-INSERT INTO ascot_case_results (
-  run_db_id, case_id, score, max_score, score_pct, passed,
-  turns, tokens_total, duration_s, total_cost, error, num_trials
-) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+INSERT_TRIAL_SQL = """
+INSERT INTO ascot_trial_results (
+  run_db_id, case_id, trial_num, score, max_score, score_pct, passed,
+  turns, tokens_total, tokens_input, tokens_output, tokens_reasoning,
+  tokens_cache_read, tokens_cache_write, duration_s, total_cost,
+  exit_code, error
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """
 
 
@@ -119,17 +145,40 @@ def init_publish_schema(
     *,
     config_path: str | Path | None = None,
     connector: Any | None = None,
-) -> None:
-    """Initialize MySQL tables for Ascot publish."""
+) -> list[tuple[int, str]]:
+    """Apply any pending schema migrations.
+
+    Idempotent: re-running on an up-to-date database does nothing. Returns the
+    list of (version, description) pairs that were applied this call.
+    """
     conn = _connect(mysql_url, config_path=config_path, connector=connector)
+    applied_now: list[tuple[int, str]] = []
     try:
         with conn.cursor() as cur:
-            cur.execute(CREATE_RUNS_TABLE)
-            cur.execute(CREATE_CASES_TABLE)
+            cur.execute(CREATE_SCHEMA_VERSION_TABLE)
         conn.commit()
-    except Exception:
-        _rollback_quietly(conn)
-        raise
+
+        with conn.cursor() as cur:
+            cur.execute("SELECT version FROM ascot_schema_version")
+            applied = {row[0] for row in cur.fetchall()}
+
+        for version, description, statements in MIGRATIONS:
+            if version in applied:
+                continue
+            try:
+                with conn.cursor() as cur:
+                    for sql in statements:
+                        cur.execute(sql)
+                    cur.execute(
+                        "INSERT INTO ascot_schema_version (version, description) VALUES (%s, %s)",
+                        (version, description),
+                    )
+                conn.commit()
+            except Exception:
+                _rollback_quietly(conn)
+                raise
+            applied_now.append((version, description))
+        return applied_now
     finally:
         conn.close()
 
@@ -151,6 +200,7 @@ def publish_run(
     run_score_pct = _score_pct(report.get("total_score", 0), report.get("max_score", 0))
 
     conn = _connect(mysql_url, config_path=config_path, connector=connector)
+    trial_count = 0
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -180,9 +230,15 @@ def publish_run(
                 raise PublishError("Could not read run id after publishing run.")
             run_db_id = row[0]
 
-            cur.execute("DELETE FROM ascot_case_results WHERE run_db_id = %s", (run_db_id,))
+            cur.execute("DELETE FROM ascot_trial_results WHERE run_db_id = %s", (run_db_id,))
             for case in report.get("results", []):
-                cur.execute(INSERT_CASE_SQL, _case_params(run_db_id, case))
+                case_id = case["case_id"]
+                for trial_index, trial in enumerate(case.get("trial_results", []) or []):
+                    cur.execute(
+                        INSERT_TRIAL_SQL,
+                        _trial_params(run_db_id, case_id, trial_index + 1, trial),
+                    )
+                    trial_count += 1
         conn.commit()
     except Exception as exc:
         _rollback_quietly(conn)
@@ -198,25 +254,35 @@ def publish_run(
         "suite_name": report["suite_name"],
         "run_id": report["run_id"],
         "case_count": len(report.get("results", [])),
+        "trial_count": trial_count,
     }
 
 
-def _case_params(run_db_id: int, case: dict[str, Any]) -> tuple[Any, ...]:
-    score = case.get("score", 0)
-    max_score = case.get("max_score", 0)
+def _trial_params(
+    run_db_id: int, case_id: str, trial_num: int, trial: dict[str, Any]
+) -> tuple[Any, ...]:
+    score = trial.get("score", 0)
+    max_score = trial.get("max_score", 0)
+    tokens = trial.get("token_usage") or {}
     return (
         run_db_id,
-        case["case_id"],
+        case_id,
+        trial_num,
         score,
         max_score,
         _score_pct(score, max_score),
-        1 if max_score > 0 and score >= max_score and not case.get("error") else 0,
-        case.get("turns", 0),
-        case.get("token_usage", {}).get("total", 0),
-        case.get("duration_s", 0.0),
-        case.get("total_cost", 0.0),
-        case.get("error"),
-        case.get("num_trials", 1),
+        1 if max_score > 0 and score >= max_score and not trial.get("error") else 0,
+        trial.get("turns", 0),
+        tokens.get("total", 0),
+        tokens.get("input", 0),
+        tokens.get("output", 0),
+        tokens.get("reasoning", 0),
+        tokens.get("cache_read", 0),
+        tokens.get("cache_write", 0),
+        trial.get("duration_s", 0.0),
+        trial.get("total_cost", 0.0),
+        trial.get("exit_code"),
+        trial.get("error"),
     )
 
 
