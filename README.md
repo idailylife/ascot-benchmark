@@ -251,14 +251,17 @@ python -m ascot inspect ./benchmark/run-001/create-report/trial-1 -f json
 
 ### `ascot init-publish` / `ascot publish`
 
-Publish aggregated benchmark results to MySQL for Grafana dashboards. This
+Publish benchmark results to MySQL for Grafana dashboards. This
 requires MySQL server access; the Python MySQL driver is installed with Ascot.
 
-Initialize the schema once:
+Initialize (or upgrade) the schema:
 
 ```bash
 ascot init-publish --mysql-url mysql://user:pass@localhost:3306/ascot
 ```
+
+`init-publish` is idempotent and is also the command used to apply schema
+migrations after an Ascot upgrade.
 
 Publish an existing run:
 
@@ -291,7 +294,7 @@ You can also set `ASCOT_PUBLISH_CONFIG` to the config path.
 For database setup, permissions, schema details, and more Grafana queries, see
 [MySQL Publish for Grafana](docs/MYSQL_PUBLISH.md).
 
-Grafana can query the two publish tables through its MySQL data source. Example
+Grafana can query the publish tables through its MySQL data source. Example
 score trend:
 
 ```sql
@@ -304,21 +307,22 @@ WHERE $__timeFilter(run_timestamp)
 ORDER BY run_timestamp
 ```
 
-Example failing cases table:
+Example failing trials table:
 
 ```sql
 SELECT
   r.run_timestamp,
   r.suite_name,
   r.run_id,
-  c.case_id,
-  c.score,
-  c.max_score,
-  c.error,
+  t.case_id,
+  t.trial_num,
+  t.score,
+  t.max_score,
+  t.error,
   r.source_path
-FROM ascot_case_results c
-JOIN ascot_runs r ON r.id = c.run_db_id
-WHERE (c.passed = 0 OR c.error IS NOT NULL)
+FROM ascot_trial_results t
+JOIN ascot_runs r ON r.id = t.run_db_id
+WHERE (t.passed = 0 OR t.error IS NOT NULL)
 ORDER BY r.run_timestamp DESC
 ```
 

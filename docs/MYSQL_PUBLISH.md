@@ -1,6 +1,6 @@
 # MySQL Publish for Grafana
 
-Ascot can publish aggregated benchmark results to MySQL so Grafana can show score, cost, token, and duration trends. It only stores key run/case metrics; detailed trial and expectation evidence stays in the local `benchmark/run-xxx/` files.
+Ascot can publish benchmark results to MySQL so Grafana can show score, cost, token, and duration trends. It stores per-trial rows so dashboards can compute their own aggregates (averages, pass rates, variance). Detailed expectation evidence, judge reasoning, and final text stay in the local `benchmark/run-xxx/` files.
 
 ## Install
 
@@ -71,18 +71,21 @@ When using `mysql://...`, URL-encode special characters in the password. The YAM
 
 ## Initialize Tables
 
-Initialize the schema once:
+Initialize (or upgrade) the schema:
 
 ```bash
 ascot init-publish --config ascot-publish.yaml
 ```
 
-This creates two tables:
+`init-publish` applies any pending schema migrations. It is idempotent — re-running on an up-to-date database does nothing — and is the same command you use to upgrade after a future Ascot release that adds tables or columns. Each applied migration is printed so you can see what changed.
 
-- `ascot_runs`: one row per benchmark run.
-- `ascot_case_results`: one row per aggregated case result.
+The current schema has three tables:
 
-The command is idempotent and can be run again after deployment.
+- `ascot_schema_version`: tracks which migrations have been applied.
+- `ascot_runs`: one row per benchmark run with overall totals.
+- `ascot_trial_results`: one row per `(run, case, trial)` with per-trial metrics.
+
+There is no separate case-level table — case aggregates are computed in SQL via `GROUP BY case_id` on `ascot_trial_results`.
 
 ## Publish a Run
 
@@ -99,7 +102,31 @@ export ASCOT_PUBLISH_CONFIG=ascot-publish.yaml
 ascot publish ./benchmark/run-001
 ```
 
-Publishing is idempotent for the same `(suite_name, run_id, run_timestamp)`. Re-running `publish` updates the run row and replaces that run's case rows.
+Publishing is idempotent for the same `(suite_name, run_id, run_timestamp)`. Re-running `publish` updates the run row and replaces that run's trial rows.
+
+## Upgrading from Ascot 0.7.x
+
+Ascot 0.8.0 reshapes the schema (removes `ascot_case_results`, adds `ascot_trial_results`) and does not migrate existing data. Drop the old tables and re-init:
+
+```sql
+DROP TABLE IF EXISTS ascot_case_results;
+DROP TABLE IF EXISTS ascot_runs;
+```
+
+Then upgrade and re-init:
+
+```bash
+pip install -U ascot
+ascot init-publish --config ascot-publish.yaml
+```
+
+Historical run data is not automatically backfilled. If you want old runs visible in the new schema, re-publish them from the on-disk `run-NNN/` directories:
+
+```bash
+for d in benchmark/run-*; do
+  ascot publish "$d" --config ascot-publish.yaml
+done
+```
 
 ## Stored Data
 
@@ -109,22 +136,24 @@ Publishing is idempotent for the same `(suite_name, run_id, run_timestamp)`. Re-
 - `num_trials`, `total_cases`
 - `total_score`, `max_score`, `score_pct`
 - `total_turns`, `total_tokens`, `total_duration_s`, `total_cost`
-- `source_path`
+- `source_path` (path to the on-disk run directory)
 
-`ascot_case_results` stores:
+`ascot_trial_results` stores, per trial:
 
-- `case_id`
+- `case_id`, `trial_num`
 - `score`, `max_score`, `score_pct`, `passed`
-- `turns`, `tokens_total`, `duration_s`, `total_cost`
-- `error`, `num_trials`
+- `turns`
+- `tokens_total`, `tokens_input`, `tokens_output`, `tokens_reasoning`, `tokens_cache_read`, `tokens_cache_write`
+- `duration_s`, `total_cost`
+- `exit_code`, `error`
 
-Ascot does not publish trial rows, expectation rows, judge reasoning, final text, or phase JSON. Use `source_path` to find the original local run directory when deeper debugging is needed.
+Ascot does not publish expectation rows, judge reasoning, final text, or phase JSON. Use `source_path` to find the original local run directory when deeper debugging is needed.
 
 ## Grafana Queries
 
 Use Grafana's MySQL data source. Configure the Grafana datasource session timezone as UTC if your MySQL server is not already using UTC.
 
-Score trend:
+Run-level score trend:
 
 ```sql
 SELECT
@@ -149,35 +178,86 @@ WHERE $__timeFilter(run_timestamp)
 ORDER BY run_timestamp
 ```
 
-Case score trend:
+Case-level score trend (mean across trials):
 
 ```sql
 SELECT
   $__time(r.run_timestamp),
-  c.score_pct,
-  c.case_id AS metric
-FROM ascot_case_results c
-JOIN ascot_runs r ON r.id = c.run_db_id
+  AVG(t.score_pct) AS score_pct,
+  t.case_id AS metric
+FROM ascot_trial_results t
+JOIN ascot_runs r ON r.id = t.run_db_id
 WHERE $__timeFilter(r.run_timestamp)
   AND r.suite_name = '$suite'
+GROUP BY r.run_timestamp, t.case_id
 ORDER BY r.run_timestamp
 ```
 
-Failing cases table:
+Pass rate per case (how often the case succeeds across trials):
+
+```sql
+SELECT
+  $__time(r.run_timestamp),
+  AVG(t.passed) AS pass_rate,
+  t.case_id AS metric
+FROM ascot_trial_results t
+JOIN ascot_runs r ON r.id = t.run_db_id
+WHERE $__timeFilter(r.run_timestamp)
+  AND r.suite_name = '$suite'
+GROUP BY r.run_timestamp, t.case_id
+ORDER BY r.run_timestamp
+```
+
+Flakiness — cases with non-zero score variance across trials in the same run:
+
+```sql
+SELECT
+  r.run_timestamp,
+  t.case_id,
+  COUNT(*) AS trials,
+  AVG(t.score_pct) AS mean_score,
+  STDDEV_SAMP(t.score_pct) AS stddev_score
+FROM ascot_trial_results t
+JOIN ascot_runs r ON r.id = t.run_db_id
+WHERE $__timeFilter(r.run_timestamp)
+  AND r.suite_name = '$suite'
+GROUP BY r.id, t.case_id
+HAVING STDDEV_SAMP(t.score_pct) > 0
+ORDER BY stddev_score DESC
+```
+
+Duration distribution (P50 / P95 per case):
+
+```sql
+SELECT
+  t.case_id,
+  AVG(t.duration_s) AS mean_s,
+  MAX(t.duration_s) AS max_s,
+  MIN(t.duration_s) AS min_s
+FROM ascot_trial_results t
+JOIN ascot_runs r ON r.id = t.run_db_id
+WHERE $__timeFilter(r.run_timestamp)
+  AND r.suite_name = '$suite'
+GROUP BY t.case_id
+ORDER BY mean_s DESC
+```
+
+Failing trials table:
 
 ```sql
 SELECT
   r.run_timestamp,
   r.suite_name,
   r.run_id,
-  c.case_id,
-  c.score,
-  c.max_score,
-  c.error,
+  t.case_id,
+  t.trial_num,
+  t.score,
+  t.max_score,
+  t.error,
   r.source_path
-FROM ascot_case_results c
-JOIN ascot_runs r ON r.id = c.run_db_id
-WHERE (c.passed = 0 OR c.error IS NOT NULL)
+FROM ascot_trial_results t
+JOIN ascot_runs r ON r.id = t.run_db_id
+WHERE (t.passed = 0 OR t.error IS NOT NULL)
 ORDER BY r.run_timestamp DESC
 ```
 
