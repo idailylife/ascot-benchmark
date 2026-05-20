@@ -256,9 +256,12 @@ def test_migrations_are_well_formed():
     for _, description, statements in MIGRATIONS:
         assert description
         assert statements
-        for sql in statements:
-            assert "IF NOT EXISTS" in sql.upper(), (
-                "migrations must be idempotent; use IF NOT EXISTS"
+        for stmt in statements:
+            if callable(stmt):
+                continue  # Callable statements pre-check state themselves.
+            assert "IF NOT EXISTS" in stmt.upper(), (
+                "SQL migrations must be idempotent; use IF NOT EXISTS "
+                "or wrap in a callable that pre-checks state"
             )
 
 

@@ -84,20 +84,35 @@ CREATE TABLE IF NOT EXISTS ascot_trial_results (
 """
 
 
-ADD_RUNS_MODEL_COLUMNS = """
-ALTER TABLE ascot_runs
-  ADD COLUMN IF NOT EXISTS benchmark_model VARCHAR(255) NULL,
-  ADD COLUMN IF NOT EXISTS grading_model VARCHAR(255) NULL
-"""
+def _add_runs_model_columns(cur: Any) -> None:
+    """Add benchmark_model + grading_model to ascot_runs if missing.
+
+    `ALTER TABLE ADD COLUMN IF NOT EXISTS` only works on MySQL 8.0.29+ and
+    MariaDB, so we check information_schema first to stay portable.
+    """
+    cur.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = DATABASE() AND table_name = 'ascot_runs' "
+        "AND column_name IN ('benchmark_model', 'grading_model')"
+    )
+    existing = {str(row[0]).lower() for row in cur.fetchall()}
+    adds = []
+    if "benchmark_model" not in existing:
+        adds.append("ADD COLUMN benchmark_model VARCHAR(255) NULL")
+    if "grading_model" not in existing:
+        adds.append("ADD COLUMN grading_model VARCHAR(255) NULL")
+    if adds:
+        cur.execute("ALTER TABLE ascot_runs " + ", ".join(adds))
 
 
-# Ordered schema migrations. Each migration's statements MUST be idempotent
-# (CREATE TABLE IF NOT EXISTS, ALTER TABLE ... IF NOT EXISTS, etc.) so a retry
-# after a partial application is safe. Versions are strictly increasing and
-# never reused or rewritten once released.
-MIGRATIONS: list[tuple[int, str, list[str]]] = [
+# Ordered schema migrations. Each entry is (version, description, statements)
+# where a statement is either a SQL string or a callable(cursor) -> None.
+# Statements MUST be idempotent — either via `CREATE TABLE IF NOT EXISTS` style
+# SQL, or by pre-checking state in a callable — so a retry after a partial
+# application is safe. Versions are strictly increasing and never reused.
+MIGRATIONS: list[tuple[int, str, list[Any]]] = [
     (1, "initial schema (runs + per-trial results)", [CREATE_RUNS_TABLE, CREATE_TRIALS_TABLE]),
-    (2, "add benchmark_model + grading_model to ascot_runs", [ADD_RUNS_MODEL_COLUMNS]),
+    (2, "add benchmark_model + grading_model to ascot_runs", [_add_runs_model_columns]),
 ]
 
 
@@ -180,7 +195,10 @@ def init_publish_schema(
             try:
                 with conn.cursor() as cur:
                     for sql in statements:
-                        cur.execute(sql)
+                        if callable(sql):
+                            sql(cur)
+                        else:
+                            cur.execute(sql)
                     cur.execute(
                         "INSERT INTO ascot_schema_version (version, description) VALUES (%s, %s)",
                         (version, description),
