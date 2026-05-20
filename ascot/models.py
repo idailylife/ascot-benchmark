@@ -42,7 +42,6 @@ class TestCase:
     description: str = ""
     workspace_files_from: str | None = None
     timeout_s: float = 600.0
-    model: str | None = None
     agent: str | None = None
     tags: list[str] = field(default_factory=list)
     test_script: str | None = None
@@ -118,6 +117,8 @@ class BenchmarkReport:
     total_duration_s: float = 0.0
     total_cost: float = 0.0
     num_trials: int = 1
+    benchmark_model: str | None = None
+    grading_model: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -133,6 +134,8 @@ class BenchmarkReport:
             "total_duration_s": self.total_duration_s,
             "total_cost": self.total_cost,
             "num_trials": self.num_trials,
+            "benchmark_model": self.benchmark_model,
+            "grading_model": self.grading_model,
         }
 
 

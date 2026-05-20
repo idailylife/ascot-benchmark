@@ -63,7 +63,12 @@ def build_permission(suite_dir: Path) -> dict[str, Any]:
 
 
 def build_report(
-    suite_name: str, run_id: str, results: list[CaseResult]
+    suite_name: str,
+    run_id: str,
+    results: list[CaseResult],
+    *,
+    benchmark_model: str | None = None,
+    grading_model: str | None = None,
 ) -> BenchmarkReport:
     total = len(results)
     total_score = sum(r.score for r in results)
@@ -84,6 +89,8 @@ def build_report(
         total_tokens=total_tokens,
         total_duration_s=total_duration,
         total_cost=total_cost,
+        benchmark_model=benchmark_model,
+        grading_model=grading_model,
     )
 
 
@@ -144,6 +151,8 @@ class BenchmarkRunner:
         self.store.save_meta(run_dir, {
             "suite_name": self.test_suite.name,
             "model": self.model,
+            "benchmark_model": self.model,
+            "grading_model": self.grading_model,
             "concurrency": self.concurrency,
             "trials": self.trials,
             "inherit_user_config": self.inherit_user_config,
@@ -173,7 +182,11 @@ class BenchmarkRunner:
             self.store.save_result(self.run_dir, tc.id, agg)
             results.append(agg)
 
-        report = build_report(self.test_suite.name, run_id, results)
+        report = build_report(
+            self.test_suite.name, run_id, results,
+            benchmark_model=self.model,
+            grading_model=self.grading_model,
+        )
         report.num_trials = self.trials
         self.store.save_report(run_dir, report)
         return report
@@ -209,7 +222,7 @@ class BenchmarkRunner:
                     }
 
             cfg = RunConfig(
-                model=tc.model or self.model,
+                model=self.model,
                 agent=tc.agent,
                 permission=self.permission,
                 extra_env=extra_env,

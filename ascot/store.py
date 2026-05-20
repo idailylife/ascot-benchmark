@@ -52,7 +52,6 @@ class RunStore:
             "prompt": test_case.prompt,
             "expectations": [{"desc": e.desc, "score": e.score} for e in test_case.expectations],
             "timeout_s": test_case.timeout_s,
-            "model": test_case.model,
             "tags": test_case.tags,
         }
         if test_case.test_script is not None:

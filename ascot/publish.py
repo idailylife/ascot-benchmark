@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS ascot_runs (
   total_duration_s DOUBLE NOT NULL DEFAULT 0,
   total_cost DOUBLE NOT NULL DEFAULT 0,
   source_path TEXT NULL,
+  benchmark_model VARCHAR(255) NULL,
+  grading_model VARCHAR(255) NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uq_ascot_runs_identity (suite_name, run_id, run_timestamp),
@@ -82,12 +84,20 @@ CREATE TABLE IF NOT EXISTS ascot_trial_results (
 """
 
 
+ADD_RUNS_MODEL_COLUMNS = """
+ALTER TABLE ascot_runs
+  ADD COLUMN IF NOT EXISTS benchmark_model VARCHAR(255) NULL,
+  ADD COLUMN IF NOT EXISTS grading_model VARCHAR(255) NULL
+"""
+
+
 # Ordered schema migrations. Each migration's statements MUST be idempotent
 # (CREATE TABLE IF NOT EXISTS, ALTER TABLE ... IF NOT EXISTS, etc.) so a retry
 # after a partial application is safe. Versions are strictly increasing and
 # never reused or rewritten once released.
 MIGRATIONS: list[tuple[int, str, list[str]]] = [
     (1, "initial schema (runs + per-trial results)", [CREATE_RUNS_TABLE, CREATE_TRIALS_TABLE]),
+    (2, "add benchmark_model + grading_model to ascot_runs", [ADD_RUNS_MODEL_COLUMNS]),
 ]
 
 
@@ -95,8 +105,8 @@ INSERT_RUN_SQL = """
 INSERT INTO ascot_runs (
   suite_name, run_id, run_timestamp, num_trials, total_cases,
   total_score, max_score, score_pct, total_turns, total_tokens,
-  total_duration_s, total_cost, source_path
-) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+  total_duration_s, total_cost, source_path, benchmark_model, grading_model
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON DUPLICATE KEY UPDATE
   num_trials = VALUES(num_trials),
   total_cases = VALUES(total_cases),
@@ -108,6 +118,8 @@ ON DUPLICATE KEY UPDATE
   total_duration_s = VALUES(total_duration_s),
   total_cost = VALUES(total_cost),
   source_path = VALUES(source_path),
+  benchmark_model = VALUES(benchmark_model),
+  grading_model = VALUES(grading_model),
   updated_at = CURRENT_TIMESTAMP
 """
 
@@ -219,6 +231,8 @@ def publish_run(
                     report.get("total_duration_s", 0.0),
                     report.get("total_cost", 0.0),
                     str(run_path),
+                    report.get("benchmark_model"),
+                    report.get("grading_model"),
                 ),
             )
             cur.execute(

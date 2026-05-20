@@ -139,7 +139,6 @@ test_cases:
 | `test_script` | no | Path to a pytest file (or nodeid `file.py::test_name`) for deterministic grading; see [Grading](#grading) |
 | `workspace_files_from` | no | Directory of files to copy into workspace (supports binary); inherits from suite-level `default_workspace_files_from` if not set |
 | `timeout_s` | no | Per-case timeout in seconds (default: 120) |
-| `model` | no | Model override for this case |
 | `agent` | no | Agent override for this case |
 | `tags` | no | Tags for filtering (`--tag`) |
 

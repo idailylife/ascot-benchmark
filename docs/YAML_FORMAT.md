@@ -22,7 +22,6 @@ test_cases:
     test_script: <path>        # optional, pytest file run after the agent finishes
     workspace_files_from: <dir path>  # optional, copy directory (binary-safe)
     timeout_s: 300           # optional, per-case
-    model: null              # optional, per-case
     agent: null              # optional, per-case
     tags: []                 # optional, for --tag filtering
 ```
@@ -51,7 +50,6 @@ test_cases:
 | `test_script` | no | Path to a pytest file. Path is relative to the testcases YAML directory. See [Test script grading](#test-script-grading). |
 | `workspace_files_from` | no | Directory copied into workspace (supports binary); inherits from suite-level `default_workspace_files_from` if not set |
 | `timeout_s` | no | Timeout in seconds (default: 120) |
-| `model` | no | Model override |
 | `agent` | no | Agent override |
 | `tags` | no | Tags for `--tag` filtering |
 

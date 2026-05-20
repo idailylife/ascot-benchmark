@@ -45,7 +45,6 @@ def _parse_test_case(raw: dict[str, Any], defaults: dict[str, Any]) -> TestCase:
         description=raw.get("description", ""),
         workspace_files_from=raw.get("workspace_files_from", defaults.get("default_workspace_files_from")),
         timeout_s=raw.get("timeout_s", defaults.get("default_timeout_s", 600.0)),
-        model=raw.get("model", defaults.get("default_model")),
         agent=raw.get("agent"),
         tags=raw.get("tags", []),
         test_script=raw.get("test_script"),

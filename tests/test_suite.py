@@ -79,7 +79,7 @@ class TestLoadTestSuite:
             "default_workspace_files_from": "../fixtures",
             "test_cases": [
                 {"id": "c1", "prompt": "hi"},
-                {"id": "c2", "prompt": "hi", "timeout_s": 60, "model": "gpt-3", "workspace_files_from": "../other"},
+                {"id": "c2", "prompt": "hi", "timeout_s": 60, "workspace_files_from": "../other"},
             ],
         }
         p = tmp_dir / "tests.yaml"
@@ -87,12 +87,12 @@ class TestLoadTestSuite:
         suite = load_test_suite(p)
         # c1 inherits defaults
         assert suite.test_cases[0].timeout_s == 300
-        assert suite.test_cases[0].model == "gpt-4"
         assert suite.test_cases[0].workspace_files_from == "../fixtures"
         # c2 overrides
         assert suite.test_cases[1].timeout_s == 60
-        assert suite.test_cases[1].model == "gpt-3"
         assert suite.test_cases[1].workspace_files_from == "../other"
+        # suite-level default_model is captured on the suite, not per-case
+        assert suite.default_model == "gpt-4"
 
     def test_directory_single_file_raises(self, tmp_dir):
         data = {"name": "dir-suite", "test_cases": [{"id": "c1", "prompt": "x"}]}

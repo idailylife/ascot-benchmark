@@ -556,7 +556,11 @@ async def regrade_run(
             _write_json(case_dir / "result.json", results[-1].to_dict())
 
     run_id = run_dir.name
-    report = build_report(meta.get("suite_name", "unknown"), run_id, results)
+    report = build_report(
+        meta.get("suite_name", "unknown"), run_id, results,
+        benchmark_model=meta.get("benchmark_model") or meta.get("model"),
+        grading_model=grading_model or meta.get("grading_model"),
+    )
     report.num_trials = num_trials
     _write_json(run_dir / "report.json", report.to_dict())
 

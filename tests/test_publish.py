@@ -320,6 +320,9 @@ def test_publish_run_writes_run_and_trial_rows(tmp_path):
     run_inserts = [item for item in conn.executed if "INSERT INTO ascot_runs" in item[0]]
     assert len(run_inserts) == 1
     assert run_inserts[0][1][7] == 0.7  # score_pct
+    # benchmark_model + grading_model trail the value tuple
+    assert run_inserts[0][1][-2] is None
+    assert run_inserts[0][1][-1] is None
 
     # case_results table no longer exists
     case_inserts = [
@@ -361,6 +364,21 @@ def test_publish_run_writes_run_and_trial_rows(tmp_path):
         if sql.startswith("DELETE FROM ascot_trial_results")
     ]
     assert len(delete_sqls) == 1
+
+
+def test_publish_run_writes_model_columns(tmp_path):
+    report = _sample_report()
+    report["benchmark_model"] = "opencode/sonnet-4-6"
+    report["grading_model"] = "opencode/haiku-4-5"
+    run_dir = _write_report(tmp_path, report)
+    conn = FakeConnection()
+    connector = FakeConnector(conn)
+
+    publish_run(run_dir, "mysql://user:pass@example.com/ascot", connector=connector)
+
+    run_inserts = [item for item in conn.executed if "INSERT INTO ascot_runs" in item[0]]
+    assert run_inserts[0][1][-2] == "opencode/sonnet-4-6"
+    assert run_inserts[0][1][-1] == "opencode/haiku-4-5"
 
 
 def test_publish_run_requires_report_json(tmp_path):

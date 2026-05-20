@@ -308,6 +308,8 @@ def _cmd_report(args: argparse.Namespace) -> None:
         total_duration_s=data.get("total_duration_s", 0.0),
         total_cost=data.get("total_cost", 0.0),
         num_trials=data.get("num_trials", 1),
+        benchmark_model=data.get("benchmark_model"),
+        grading_model=data.get("grading_model"),
     )
 
     from .report import format_json, format_terminal

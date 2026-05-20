@@ -128,6 +128,10 @@ for d in benchmark/run-*; do
 done
 ```
 
+## Upgrading from Ascot 0.8.0
+
+Ascot 0.8.1 adds `benchmark_model` and `grading_model` columns to `ascot_runs` via migration v2. Run `ascot init-publish --config ascot-publish.yaml` once to apply it — existing rows keep `NULL` for these columns; re-publish a run to backfill them.
+
 ## Stored Data
 
 `ascot_runs` stores:
@@ -136,6 +140,7 @@ done
 - `num_trials`, `total_cases`
 - `total_score`, `max_score`, `score_pct`
 - `total_turns`, `total_tokens`, `total_duration_s`, `total_cost`
+- `benchmark_model` (model used to run the cases), `grading_model` (model used by the LLM judge)
 - `source_path` (path to the on-disk run directory)
 
 `ascot_trial_results` stores, per trial:
@@ -265,6 +270,22 @@ Suite variable:
 
 ```sql
 SELECT DISTINCT suite_name FROM ascot_runs ORDER BY suite_name
+```
+
+Compare benchmark models on the same suite (mean score and cost per model):
+
+```sql
+SELECT
+  benchmark_model,
+  COUNT(*) AS runs,
+  AVG(score_pct) AS mean_score_pct,
+  AVG(total_cost) AS mean_cost
+FROM ascot_runs
+WHERE $__timeFilter(run_timestamp)
+  AND suite_name = '$suite'
+  AND benchmark_model IS NOT NULL
+GROUP BY benchmark_model
+ORDER BY mean_score_pct DESC
 ```
 
 ## Troubleshooting
