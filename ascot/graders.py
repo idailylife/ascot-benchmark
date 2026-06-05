@@ -48,9 +48,24 @@ def _copy_events_without_reasoning(src: Path, dest: Path) -> None:
             except json.JSONDecodeError:
                 fout.write(line)
                 continue
-            if isinstance(ev, dict) and ev.get("type") == "reasoning":
+            if isinstance(ev, dict) and _is_reasoning_event(ev):
                 continue
             fout.write(line)
+
+
+def _is_reasoning_event(ev: dict) -> bool:
+    """True for a reasoning/thinking event in either run-mode or session shape.
+
+    Run mode emits `{"type": "reasoning", ...}`; session (SSE) mode emits
+    `{"type": "message.part.updated", "properties": {"part": {"type": "reasoning"}}}`.
+    """
+    etype = ev.get("type")
+    if etype == "reasoning":
+        return True
+    if etype == "message.part.updated":
+        part = ev.get("properties", {}).get("part", {})
+        return isinstance(part, dict) and part.get("type") == "reasoning"
+    return False
 
 
 def _setup_judge_workspace(case_dir: Path) -> Path:
@@ -661,8 +676,8 @@ def _build_review_prompt(
         )
     sections.append("")
     sections.append(
-        "Each `events.jsonl` includes `type: \"reasoning\"` entries capturing "
-        "the agent's internal thinking before tool calls and final answers. "
+        "Each `events.jsonl` includes reasoning entries capturing the agent's "
+        "internal thinking before tool calls and final answers. "
         "Read these to understand *why* the agent made each decision — they "
         "often reveal the root cause more directly than the tool calls alone.\n"
     )

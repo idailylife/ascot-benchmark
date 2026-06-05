@@ -64,7 +64,12 @@ def _tool_detail(tool_name: str | None, state: dict[str, Any]) -> str | None:
 
 
 def parse_events(case_dir: Path) -> CaseTrace:
-    """Parse events.jsonl from a case directory into a CaseTrace."""
+    """Parse events.jsonl from a case directory into a CaseTrace.
+
+    Handles both run-mode shapes (`step_start`/`tool_use`/`step_finish`) and
+    session/SSE shapes (`message.part.updated`/`message.updated`), the latter
+    produced by auto-continue (`max_continues > 0`) cases.
+    """
     events_path = case_dir / "events.jsonl"
     if not events_path.exists():
         raise FileNotFoundError(f"No events.jsonl in {case_dir}")
@@ -77,6 +82,10 @@ def parse_events(case_dir: Path) -> CaseTrace:
                 events.append(json.loads(line))
 
     case_id = case_dir.name
+
+    if any(str(ev.get("type", "")).startswith("message.") for ev in events):
+        return _parse_session_events(case_id, events)
+
     steps: list[StepTrace] = []
     step_num = 0
     step_start_ts: int | None = None
@@ -164,6 +173,98 @@ def parse_events(case_dir: Path) -> CaseTrace:
                     cache[ck] = cache.get(ck, 0) + (cv or 0)
             elif isinstance(v, (int, float)):
                 total_tokens[k] = total_tokens.get(k, 0) + v
+
+    return CaseTrace(
+        case_id=case_id,
+        steps=steps,
+        total_duration_ms=total_duration_ms,
+        total_tokens=total_tokens,
+        total_cost=total_cost,
+    )
+
+
+def _parse_session_events(case_id: str, events: list[dict[str, Any]]) -> CaseTrace:
+    """Parse server-mode (SSE) events into a CaseTrace.
+
+    Session events have no per-step boundaries or top-level timestamps. We build
+    one step per tool part (keeping the latest snapshot per part id, since parts
+    are replaced as they stream), derive timing from `part.state.time`, and pull
+    token/cost totals from `message.updated` assistant-message snapshots.
+    """
+    tool_parts: dict[str, dict[str, Any]] = {}
+    tool_order: list[str] = []
+    # latest token/cost snapshot per assistant message id (avoids double counting)
+    msg_tokens: dict[str, dict[str, Any]] = {}
+    msg_cost: dict[str, float] = {}
+
+    for ev in events:
+        etype = ev.get("type")
+        props = ev.get("properties", {}) if isinstance(ev.get("properties"), dict) else {}
+        if etype in ("message.part.updated", "message.part.delta"):
+            part = props.get("part")
+            if not isinstance(part, dict) or part.get("type") != "tool":
+                continue
+            pid = part.get("id") or part.get("callID") or ""
+            if pid not in tool_parts:
+                tool_order.append(pid)
+            tool_parts[pid] = part
+        elif etype == "message.updated":
+            info = props.get("info")
+            if isinstance(info, dict) and info.get("role") == "assistant":
+                mid = info.get("id") or ""
+                tokens = info.get("tokens")
+                if isinstance(tokens, dict):
+                    msg_tokens[mid] = tokens
+                cost = info.get("cost")
+                if isinstance(cost, (int, float)):
+                    msg_cost[mid] = float(cost)
+
+    steps: list[StepTrace] = []
+    prev_tool_end: int | None = None
+    min_start: int | None = None
+    max_end: int | None = None
+
+    for i, pid in enumerate(tool_order, start=1):
+        part = tool_parts[pid]
+        state = part.get("state", {}) if isinstance(part.get("state"), dict) else {}
+        time_info = state.get("time", {}) if isinstance(state.get("time"), dict) else {}
+        start = time_info.get("start")
+        end = time_info.get("end")
+
+        tool_time_ms = end - start if isinstance(start, int) and isinstance(end, int) else 0
+        reasoning_ms = (
+            start - prev_tool_end
+            if isinstance(start, int) and isinstance(prev_tool_end, int)
+            else 0
+        )
+        if isinstance(start, int):
+            min_start = start if min_start is None else min(min_start, start)
+            prev_tool_end = end if isinstance(end, int) else prev_tool_end
+        if isinstance(end, int):
+            max_end = end if max_end is None else max(max_end, end)
+
+        tool_name = part.get("tool")
+        steps.append(StepTrace(
+            step=i,
+            reasoning_ms=max(0, reasoning_ms),
+            tool_name=tool_name,
+            tool_detail=_tool_detail(tool_name, state),
+            tool_call_id=part.get("callID"),
+            tool_time_ms=max(0, tool_time_ms),
+            tool_status=state.get("status"),
+        ))
+
+    total_tokens: dict[str, Any] = {}
+    for tokens in msg_tokens.values():
+        for k, v in tokens.items():
+            if k == "cache" and isinstance(v, dict):
+                cache = total_tokens.setdefault("cache", {})
+                for ck, cv in v.items():
+                    cache[ck] = cache.get(ck, 0) + (cv or 0)
+            elif isinstance(v, (int, float)):
+                total_tokens[k] = total_tokens.get(k, 0) + v
+    total_cost = sum(msg_cost.values())
+    total_duration_ms = (max_end - min_start) if min_start is not None and max_end is not None else 0
 
     return CaseTrace(
         case_id=case_id,

@@ -10,6 +10,7 @@ default_model: opencode/deepseek-v4-flash-free  # optional model override
 grading_model: null          # optional, model for LLM judge (defaults to default_model)
 default_workspace_files_from: null  # optional, inherited by all cases
 default_test_script_timeout_s: 60   # optional, default 60s for every test_script
+default_max_continues: 3            # optional, auto-continue nudges (default 3; 0 = no nudges)
 
 test_cases:
   - id: <kebab-case-id>
@@ -24,6 +25,7 @@ test_cases:
     timeout_s: 300           # optional, per-case
     agent: null              # optional, per-case
     tags: []                 # optional, for --tag filtering
+    max_continues: 3         # optional, auto-continue nudges (default 3; 0 = no nudges)
 ```
 
 ## Fields
@@ -39,6 +41,7 @@ test_cases:
 | `grading_model` | no | Model for the LLM judge; takes priority over `default_model` |
 | `default_workspace_files_from` | no | Default workspace files directory, inherited by all cases |
 | `default_test_script_timeout_s` | no | Timeout in seconds for every `test_script` invocation (default: 60) |
+| `default_max_continues` | no | Default auto-continue nudge budget for all cases (default: 3; 0 = no nudges). See [Auto-continue](#auto-continue). |
 
 ### Per-case fields
 
@@ -52,6 +55,7 @@ test_cases:
 | `timeout_s` | no | Timeout in seconds (default: 120) |
 | `agent` | no | Agent override |
 | `tags` | no | Tags for `--tag` filtering |
+| `max_continues` | no | Auto-continue nudge budget (default: 3; 0 = no nudges); inherits from suite-level `default_max_continues`. See [Auto-continue](#auto-continue). |
 
 ## Expectations (LLM-judged)
 
@@ -89,6 +93,44 @@ A case with only `test_script` and no `expectations` skips the LLM judge entirel
 ### pytest dependency
 
 `pytest` must be importable in the same Python environment that runs `ascot`. Install with `pip install -e ".[dev]"`, or `pip install pytest`. The framework invokes pytest via `python -m pytest`, so no `pytest` binary on `$PATH` is required. If your `test_script` needs extra libraries (`pandas`, `openpyxl`, etc.), install them in the same environment.
+
+## Auto-continue & completion signal
+
+Every case runs as a multi-turn server session. Ascot always injects a completion-protocol
+instruction into the agent's system prompt telling it to create an empty file
+`.ascot/complete` *only when the task is genuinely done*. This serves two purposes:
+
+1. **Auto-continue.** Some agents stop *early* — they pause before the task is actually
+   finished but well before `timeout_s`. When the agent stops without having created the
+   sentinel, the framework re-prompts it in the same session to keep working, up to
+   `max_continues` times.
+2. **Completion signal.** Whether the agent created the sentinel is recorded per trial as
+   `signaled_completion` and shown in the report's `Done` column. It is **informational
+   only** — it does not contribute to the score (which still comes from `expectations` +
+   `test_script`).
+
+```yaml
+- id: long-refactor
+  prompt: |
+    Refactor the module and make all tests pass.
+  max_continues: 3      # up to 3 "keep going" nudges after the initial turn (default)
+  timeout_s: 900        # total wall-clock budget across ALL turns
+```
+
+How it works:
+- **Sentinel file.** As soon as `.ascot/complete` exists, the loop ends — no further nudges.
+- **Nudge budget.** `max_continues` caps how many "you stopped before signaling completion,
+  continue working" re-prompts are sent after the initial turn. With `max_continues: 3` the
+  agent can be prompted at most 4 times total (1 initial + 3 continues). `max_continues: 0`
+  still asks for the sentinel but sends no nudges — a single turn.
+- **`timeout_s` is the total budget.** It bounds the *entire* session — server startup plus
+  every turn combined — not each turn. When it runs out mid-turn, the partial work captured
+  so far is graded.
+- **The loop stops** at the first of: sentinel created, nudge budget spent, or `timeout_s`
+  exhausted.
+- **`.ascot/` is private.** The injected instruction file and the completion sentinel live
+  under `.ascot/` and are excluded from the preserved `workspace/`, so the judge never sees
+  them.
 
 ## Example
 

@@ -31,6 +31,7 @@ class TestCaseResultToDict:
         assert d["case_id"] == "c1"
         assert d["score"] == 5
         assert d["max_score"] == 10
+        assert d["signaled_completion"] is False
         assert "phases" not in d  # omitted when empty
 
     def test_includes_phases_when_present(self):
@@ -147,3 +148,13 @@ class TestAggregateTrials:
         t2 = self._make_trial(0, 0, total_cost=0.02)
         agg = aggregate_trials("c1", [t1, t2])
         assert abs(agg.total_cost - 0.03) < 1e-9
+
+    def test_signaled_completion_all(self):
+        t1 = self._make_trial(0, 0, signaled_completion=True)
+        t2 = self._make_trial(0, 0, signaled_completion=True)
+        assert aggregate_trials("c1", [t1, t2]).signaled_completion is True
+
+    def test_signaled_completion_partial_is_false(self):
+        t1 = self._make_trial(0, 0, signaled_completion=True)
+        t2 = self._make_trial(0, 0, signaled_completion=False)
+        assert aggregate_trials("c1", [t1, t2]).signaled_completion is False

@@ -45,6 +45,7 @@ class TestCase:
     agent: str | None = None
     tags: list[str] = field(default_factory=list)
     test_script: str | None = None
+    max_continues: int = 3
 
 
 @dataclass
@@ -59,6 +60,7 @@ class TestSuite:
     grading_model: str | None = None
     default_workspace_files_from: str | None = None
     default_test_script_timeout_s: float = 60.0
+    default_max_continues: int = 3
 
 
 @dataclass
@@ -79,6 +81,9 @@ class CaseResult:
     phases: dict[str, dict[str, Any]] = field(default_factory=dict)
     trial_results: list["CaseResult"] = field(default_factory=list)
     num_trials: int = 1
+    # Whether the agent self-signaled completion (created the .ascot/complete
+    # sentinel). Informational only — does not contribute to the score.
+    signaled_completion: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         d = {
@@ -93,6 +98,7 @@ class CaseResult:
             "turns": self.turns,
             "duration_s": self.duration_s,
             "error": self.error,
+            "signaled_completion": self.signaled_completion,
             "num_trials": self.num_trials,
             "trial_results": [tr.to_dict() for tr in self.trial_results],
         }
@@ -182,4 +188,5 @@ def aggregate_trials(case_id: str, trials: list[CaseResult]) -> CaseResult:
         duration_s=sum(t.duration_s for t in trials),
         trial_results=trials,
         num_trials=n,
+        signaled_completion=all(t.signaled_completion for t in trials),
     )

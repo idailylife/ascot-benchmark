@@ -41,8 +41,12 @@ def setup_workspace(
 
 
 def preserve_workspace(ws: Path, dest: Path) -> None:
-    """Copy workspace output files to dest, excluding .opencode/ and .venv/."""
-    shutil.copytree(ws, dest, ignore=shutil.ignore_patterns(".opencode", ".venv"))
+    """Copy workspace output files to dest, excluding .opencode/, .venv/, .ascot/.
+
+    `.ascot/` holds ascot's injected completion instruction and the agent's
+    completion sentinel (auto-continue mode); it must not leak into the judge's view.
+    """
+    shutil.copytree(ws, dest, ignore=shutil.ignore_patterns(".opencode", ".venv", ".ascot"))
 
 
 def cleanup_workspace(ws: Path) -> None:

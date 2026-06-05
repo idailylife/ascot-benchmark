@@ -23,7 +23,7 @@ test_cases:
   - id: process-input-file
     description: "Read input and produce output"
     prompt: |
-      Read names.txt, and for each name create a greeting line.
+      Read hello-input/names.txt, and for each name create a greeting line.
       Write the result to greetings.txt.
     workspace_files_from: ../hello-input
     test_script: ./verifiers/test_greetings_for_names.py

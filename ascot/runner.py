@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,8 @@ from typing import Any
 from opencode_wrapper import (
     AsyncOpenCodeClient,
     OpenCodeError,
+    OpenCodeSession,
+    OpenCodeTimeoutError,
     RunConfig,
     RunResult,
 )
@@ -32,6 +35,59 @@ DEFAULT_PERMISSION: dict[str, Any] = {
     "external_directory": "deny",
     "doom_loop": "deny",
 }
+
+# Auto-continue / completion-sentinel machinery. Every case runs as a session and is
+# asked to signal completion; max_continues bounds how many "keep going" nudges follow.
+# Everything ascot injects lives under `.ascot/` so it is excluded from preserved output.
+INSTRUCTION_REL = ".ascot/completion.md"  # written by ascot, fed to the system prompt
+SENTINEL_REL = ".ascot/complete"          # created by the agent to signal completion
+
+COMPLETION_INSTRUCTION_TEXT = (
+    "# Task completion protocol\n\n"
+    "You are being evaluated on a task. Keep working until the task is FULLY "
+    "complete.\n\n"
+    "When — and only when — you are certain the task is finished, signal completion "
+    "by creating an empty file at the exact path `.ascot/complete` in the current "
+    "working directory (for example, run `touch .ascot/complete`, creating the "
+    "`.ascot/` directory first if needed).\n\n"
+    "Do NOT create this file until the task is genuinely done. If you stop before "
+    "creating it, you will be prompted to continue.\n"
+)
+
+CONTINUE_PROMPT = (
+    "You stopped before signaling completion. If the task is fully complete, create "
+    "the `.ascot/complete` file now as instructed. Otherwise, continue working until "
+    "it is done."
+)
+
+
+def _merge_results(results: list[RunResult]) -> RunResult:
+    """Combine per-turn RunResults from an auto-continue session into one.
+
+    Stats (cost/turns/tokens) are summed across turns; final_text is the last
+    non-empty turn's answer. The accumulated events.jsonl on disk remains the
+    grader's evidence source, so the merged `.events` list is left empty.
+    """
+    merged = RunResult()
+    if not results:
+        return merged
+    for r in results:
+        merged.total_cost += r.total_cost
+        merged.turns += r.turns
+        tu, mu = r.token_usage, merged.token_usage
+        mu.total += tu.total
+        mu.input += tu.input
+        mu.output += tu.output
+        mu.reasoning += tu.reasoning
+        mu.cache_read += tu.cache_read
+        mu.cache_write += tu.cache_write
+    merged.exit_code = results[-1].exit_code
+    merged.session_id = results[0].session_id
+    for r in reversed(results):
+        if (r.final_text or "").strip():
+            merged.final_text = r.final_text
+            break
+    return merged
 
 
 def _load_suite_permission(suite_dir: Path) -> dict[str, Any]:
@@ -227,16 +283,13 @@ class BenchmarkRunner:
                 permission=self.permission,
                 extra_env=extra_env,
                 inherit_user_config=self.inherit_user_config,
-                record_thinking=True,
             )
             trial_d = self.store.trial_dir(self.run_dir, tc.id, trial_num)
             events_path = trial_d / "events.jsonl"
             t0 = time.monotonic()
-            result = await self.client.async_run(
-                tc.prompt, str(ws), run_cfg=cfg, timeout_s=tc.timeout_s,
-                log_file=events_path,
-            )
+            result = await self._run_session(tc, ws, cfg, events_path)
             duration = time.monotonic() - t0
+            signaled_completion = (ws / SENTINEL_REL).exists()
 
             agent_stats = {
                 "duration_s": round(duration, 3),
@@ -270,6 +323,7 @@ class BenchmarkRunner:
             grading_stats["duration_s"] = round(time.monotonic() - t_grade, 3)
             phases["grading"] = grading_stats
 
+            case_result.signaled_completion = signaled_completion
             case_result.phases = phases
             self.store.save_trial_result(self.run_dir, tc.id, trial_num, case_result)
 
@@ -292,6 +346,47 @@ class BenchmarkRunner:
             return cr
         finally:
             cleanup_workspace(ws)
+
+    async def _run_session(
+        self, tc: TestCase, ws: Path, cfg: RunConfig, events_path: Path,
+    ) -> RunResult:
+        """Run a case as a multi-turn session with auto-continue.
+
+        Injects a completion-protocol file into the agent's system prompt, then
+        re-prompts the same session until the agent signals completion (creates
+        SENTINEL_REL), the continue budget (tc.max_continues) is spent, or the
+        total tc.timeout_s budget — spanning server startup and all turns — runs out.
+        """
+        instr_path = ws / INSTRUCTION_REL
+        instr_path.parent.mkdir(parents=True, exist_ok=True)
+        instr_path.write_text(COMPLETION_INSTRUCTION_TEXT)
+        cfg = replace(cfg, instructions=[*(cfg.instructions or []), str(instr_path)])
+
+        sentinel = ws / SENTINEL_REL
+        deadline = time.monotonic() + tc.timeout_s
+        results: list[RunResult] = []
+        async with OpenCodeSession(
+            self.client, str(ws), run_cfg=cfg, log_file=events_path,
+            on_permission=None, on_question=None,
+        ) as session:
+            prompt = tc.prompt
+            continues = 0
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    r = await session.send(prompt, timeout_s=remaining)
+                except OpenCodeTimeoutError:
+                    break  # partial events already flushed to log_file
+                results.append(r)
+                if sentinel.exists():
+                    break
+                if continues >= tc.max_continues:
+                    break
+                continues += 1
+                prompt = CONTINUE_PROMPT
+        return _merge_results(results)
 
     def _resolve_test_script(self, tc: TestCase) -> Path | None:
         """Resolve tc.test_script to an absolute path against testcases_dir."""

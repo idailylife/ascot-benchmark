@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 
 from ascot.graders import (
+    _copy_events_without_reasoning,
     _dump_judge_debug,
     _has_verdict_issue,
     _read_verdict_file,
@@ -13,6 +14,38 @@ from ascot.models import Expectation, ExpectationResult
 
 def _write_verdict(judge_ws, obj):
     (judge_ws / "verdict.json").write_text(json.dumps(obj))
+
+
+class TestCopyEventsWithoutReasoning:
+    def _lines(self, *events):
+        return "".join(json.dumps(e) + "\n" for e in events)
+
+    def test_strips_both_run_and_session_reasoning(self, tmp_path):
+        src = tmp_path / "events.jsonl"
+        src.write_text(self._lines(
+            {"type": "reasoning", "text": "run-mode thinking"},
+            {"type": "tool_use", "part": {"tool": "bash"}},
+            {"type": "message.part.updated",
+             "properties": {"part": {"type": "reasoning", "text": "sse thinking"}}},
+            {"type": "message.part.updated",
+             "properties": {"part": {"type": "text", "text": "answer"}}},
+            {"type": "message.updated", "properties": {"info": {"role": "assistant"}}},
+        ))
+        dest = tmp_path / "out.jsonl"
+        _copy_events_without_reasoning(src, dest)
+
+        kept = [json.loads(l) for l in dest.read_text().splitlines() if l.strip()]
+        types = [e["type"] for e in kept]
+        assert types == ["tool_use", "message.part.updated", "message.updated"]
+        # the surviving message.part.updated is the text part, not reasoning
+        assert kept[1]["properties"]["part"]["type"] == "text"
+
+    def test_preserves_malformed_lines(self, tmp_path):
+        src = tmp_path / "events.jsonl"
+        src.write_text("not json\n" + json.dumps({"type": "reasoning"}) + "\n")
+        dest = tmp_path / "out.jsonl"
+        _copy_events_without_reasoning(src, dest)
+        assert dest.read_text() == "not json\n"
 
 
 class TestReadVerdictFile:

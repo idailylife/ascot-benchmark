@@ -164,6 +164,30 @@ class TestLoadTestSuite:
         suite = load_test_suite(tmp_dir / "t.yaml")
         assert suite.grading_model is None
 
+    def test_max_continues_defaults_to_three(self, tmp_dir):
+        data = {"name": "s", "test_cases": [{"id": "c1", "prompt": "hi"}]}
+        self._write_yaml(tmp_dir / "t.yaml", data)
+        suite = load_test_suite(tmp_dir / "t.yaml")
+        assert suite.default_max_continues == 3
+        assert suite.test_cases[0].max_continues == 3
+
+    def test_max_continues_cascade_and_override(self, tmp_dir):
+        data = {
+            "name": "s",
+            "default_max_continues": 2,
+            "test_cases": [
+                {"id": "c1", "prompt": "hi"},                      # inherits 2
+                {"id": "c2", "prompt": "hi", "max_continues": 5},  # overrides
+                {"id": "c3", "prompt": "hi", "max_continues": 0},  # explicit off
+            ],
+        }
+        self._write_yaml(tmp_dir / "t.yaml", data)
+        suite = load_test_suite(tmp_dir / "t.yaml")
+        assert suite.default_max_continues == 2
+        assert suite.test_cases[0].max_continues == 2
+        assert suite.test_cases[1].max_continues == 5
+        assert suite.test_cases[2].max_continues == 0
+
     def test_tags_and_agent(self, tmp_dir):
         data = {
             "name": "s",

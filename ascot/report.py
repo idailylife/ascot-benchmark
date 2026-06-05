@@ -7,10 +7,22 @@ import json
 from .models import BenchmarkReport
 
 
+def _done_str(r) -> str:
+    """Completion-signal indicator for a case row.
+
+    Multi-trial: fraction of trials that signaled completion (e.g. "2/3").
+    Single trial: "yes"/"no".
+    """
+    if r.trial_results:
+        signaled = sum(1 for t in r.trial_results if t.signaled_completion)
+        return f"{signaled}/{len(r.trial_results)}"
+    return "yes" if r.signaled_completion else "no"
+
+
 def format_terminal(report: BenchmarkReport, *, show_cost: bool = False) -> str:
     """Format a report for terminal display."""
     lines: list[str] = []
-    w = 70
+    w = 78
 
     lines.append("=" * w)
     title = f" Ascot Benchmark: {report.suite_name}  |  {report.run_id}"
@@ -20,7 +32,7 @@ def format_terminal(report: BenchmarkReport, *, show_cost: bool = False) -> str:
     lines.append("=" * w)
 
     # Header
-    header = f" {'Case':<22} {'Score':<10} {'Turns':>5} {'Tokens':>8} {'Time':>7}"
+    header = f" {'Case':<22} {'Score':<10} {'Turns':>5} {'Tokens':>8} {'Time':>7} {'Done':>5}"
     if show_cost:
         header += f" {'Cost':>8}"
     lines.append(header)
@@ -30,7 +42,7 @@ def format_terminal(report: BenchmarkReport, *, show_cost: bool = False) -> str:
     for r in report.results:
         score_str = f"{r.score}/{r.max_score}" if r.max_score > 0 else "-"
         tokens = r.token_usage.get("total", 0)
-        row = f" {r.case_id:<22} {score_str:<10} {r.turns:>5} {tokens:>8,} {r.duration_s:>6.1f}s"
+        row = f" {r.case_id:<22} {score_str:<10} {r.turns:>5} {tokens:>8,} {r.duration_s:>6.1f}s {_done_str(r):>5}"
         if show_cost:
             row += f" ${r.total_cost:>7.4f}"
         lines.append(row)

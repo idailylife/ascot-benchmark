@@ -48,6 +48,7 @@ def _parse_test_case(raw: dict[str, Any], defaults: dict[str, Any]) -> TestCase:
         agent=raw.get("agent"),
         tags=raw.get("tags", []),
         test_script=raw.get("test_script"),
+        max_continues=raw.get("max_continues", defaults.get("default_max_continues", 3)),
     )
 
 
@@ -80,6 +81,7 @@ def _build_suite(data: dict[str, Any]) -> TestSuite:
         "default_timeout_s": data.get("default_timeout_s", 600.0),
         "default_model": data.get("default_model"),
         "default_workspace_files_from": data.get("default_workspace_files_from"),
+        "default_max_continues": data.get("default_max_continues", 3),
     }
     cases = [_parse_test_case(dict(tc), defaults) for tc in data.get("test_cases", [])]
     return TestSuite(
@@ -91,4 +93,5 @@ def _build_suite(data: dict[str, Any]) -> TestSuite:
         grading_model=data.get("grading_model"),
         default_workspace_files_from=defaults["default_workspace_files_from"],
         default_test_script_timeout_s=data.get("default_test_script_timeout_s", 60.0),
+        default_max_continues=defaults["default_max_continues"],
     )

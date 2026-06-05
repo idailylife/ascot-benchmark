@@ -53,6 +53,7 @@ class RunStore:
             "expectations": [{"desc": e.desc, "score": e.score} for e in test_case.expectations],
             "timeout_s": test_case.timeout_s,
             "tags": test_case.tags,
+            "max_continues": test_case.max_continues,
         }
         if test_case.test_script is not None:
             data["test_script"] = test_case.test_script
