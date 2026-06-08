@@ -14,8 +14,34 @@ from ascot.runner import (
     BenchmarkRunner,
     _merge_results,
     _preserve_workspace_best_effort,
+    _strip_delta_lines,
     build_permission,
 )
+
+
+class TestStripDeltaLines:
+    def test_drops_deltas_keeps_reasoning_and_snapshots(self, tmp_path):
+        p = tmp_path / "events.jsonl"
+        p.write_text("".join(json.dumps(e) + "\n" for e in [
+            {"type": "message.part.delta", "properties": {"delta": "Hel"}},
+            {"type": "reasoning", "text": "thinking"},
+            {"type": "message.part.delta", "properties": {"delta": "lo"}},
+            {"type": "message.part.updated",
+             "properties": {"part": {"id": "p1", "type": "text", "text": "Hello"}}},
+        ]))
+        _strip_delta_lines(p)
+        types = [json.loads(l)["type"] for l in p.read_text().splitlines() if l.strip()]
+        assert types == ["reasoning", "message.part.updated"]
+
+    def test_missing_file_is_noop(self, tmp_path):
+        _strip_delta_lines(tmp_path / "nope.jsonl")  # must not raise
+
+    def test_preserves_malformed_lines(self, tmp_path):
+        p = tmp_path / "events.jsonl"
+        p.write_text("not json\n" + json.dumps(
+            {"type": "message.part.delta", "properties": {}}) + "\n")
+        _strip_delta_lines(p)
+        assert p.read_text() == "not json\n"
 
 
 def test_build_permission_reads_json_with_schema_url(tmp_path):

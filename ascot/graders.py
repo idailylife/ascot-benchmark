@@ -31,12 +31,15 @@ JUDGE_PERMISSION: dict[str, str] = {
 }
 
 
-def _copy_events_without_reasoning(src: Path, dest: Path) -> None:
-    """Copy events.jsonl, dropping `type: "reasoning"` lines.
+def _copy_events_for_judge(src: Path, dest: Path) -> None:
+    """Copy events.jsonl, dropping reasoning and streaming-delta lines.
 
-    The judge doesn't need the agent's thinking trace; stripping it keeps
-    judge context small. The full file (with reasoning) stays in the trial
-    dir for `ascot review` and post-hoc analysis.
+    The judge doesn't need the agent's thinking trace, nor the incremental
+    `message.part.delta` chunks emitted in session/server mode — the final
+    `message.part.updated` snapshot already carries each part's full text, so
+    the deltas are redundant and only inflate judge context. The full file
+    (with everything) stays in the trial dir for `ascot review` and post-hoc
+    analysis.
     """
     with open(src) as fin, open(dest, "w") as fout:
         for line in fin:
@@ -48,8 +51,11 @@ def _copy_events_without_reasoning(src: Path, dest: Path) -> None:
             except json.JSONDecodeError:
                 fout.write(line)
                 continue
-            if isinstance(ev, dict) and _is_reasoning_event(ev):
-                continue
+            if isinstance(ev, dict):
+                if ev.get("type") == "message.part.delta":
+                    continue
+                if _is_reasoning_event(ev):
+                    continue
             fout.write(line)
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import replace
@@ -88,6 +89,35 @@ def _merge_results(results: list[RunResult]) -> RunResult:
             merged.final_text = r.final_text
             break
     return merged
+
+
+def _strip_delta_lines(events_path: Path) -> None:
+    """Rewrite events.jsonl in place, dropping `message.part.delta` lines.
+
+    Session/server mode streams token-by-token `message.part.delta` chunks; the
+    final `message.part.updated` snapshot already carries each part's full text,
+    so the deltas are pure redundancy that can bloat the file 5-10x. Reasoning
+    entries are deliberately kept here for `ascot review`. Malformed lines are
+    preserved as-is.
+    """
+    if not events_path.exists():
+        return
+    kept: list[str] = []
+    with open(events_path) as fin:
+        for line in fin:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                ev = json.loads(stripped)
+            except json.JSONDecodeError:
+                kept.append(line)
+                continue
+            if isinstance(ev, dict) and ev.get("type") == "message.part.delta":
+                continue
+            kept.append(line)
+    with open(events_path, "w") as fout:
+        fout.writelines(kept)
 
 
 def _load_suite_permission(suite_dir: Path) -> dict[str, Any]:
@@ -386,6 +416,7 @@ class BenchmarkRunner:
                     break
                 continues += 1
                 prompt = CONTINUE_PROMPT
+        _strip_delta_lines(events_path)
         return _merge_results(results)
 
     def _resolve_test_script(self, tc: TestCase) -> Path | None:

@@ -4,7 +4,7 @@ import json
 from types import SimpleNamespace
 
 from ascot.graders import (
-    _copy_events_without_reasoning,
+    _copy_events_for_judge,
     _dump_judge_debug,
     _has_verdict_issue,
     _read_verdict_file,
@@ -16,7 +16,7 @@ def _write_verdict(judge_ws, obj):
     (judge_ws / "verdict.json").write_text(json.dumps(obj))
 
 
-class TestCopyEventsWithoutReasoning:
+class TestCopyEventsForJudge:
     def _lines(self, *events):
         return "".join(json.dumps(e) + "\n" for e in events)
 
@@ -32,7 +32,7 @@ class TestCopyEventsWithoutReasoning:
             {"type": "message.updated", "properties": {"info": {"role": "assistant"}}},
         ))
         dest = tmp_path / "out.jsonl"
-        _copy_events_without_reasoning(src, dest)
+        _copy_events_for_judge(src, dest)
 
         kept = [json.loads(l) for l in dest.read_text().splitlines() if l.strip()]
         types = [e["type"] for e in kept]
@@ -40,11 +40,28 @@ class TestCopyEventsWithoutReasoning:
         # the surviving message.part.updated is the text part, not reasoning
         assert kept[1]["properties"]["part"]["type"] == "text"
 
+    def test_strips_streaming_deltas(self, tmp_path):
+        src = tmp_path / "events.jsonl"
+        src.write_text(self._lines(
+            {"type": "message.part.delta",
+             "properties": {"delta": "Hel", "partID": "p1", "field": "text"}},
+            {"type": "message.part.delta",
+             "properties": {"delta": "lo", "partID": "p1", "field": "text"}},
+            {"type": "message.part.updated",
+             "properties": {"part": {"id": "p1", "type": "text", "text": "Hello"}}},
+        ))
+        dest = tmp_path / "out.jsonl"
+        _copy_events_for_judge(src, dest)
+
+        kept = [json.loads(l) for l in dest.read_text().splitlines() if l.strip()]
+        types = [e["type"] for e in kept]
+        assert types == ["message.part.updated"]
+
     def test_preserves_malformed_lines(self, tmp_path):
         src = tmp_path / "events.jsonl"
         src.write_text("not json\n" + json.dumps({"type": "reasoning"}) + "\n")
         dest = tmp_path / "out.jsonl"
-        _copy_events_without_reasoning(src, dest)
+        _copy_events_for_judge(src, dest)
         assert dest.read_text() == "not json\n"
 
 
