@@ -18,6 +18,8 @@ python -m pytest tests/ -k "test_timed"   # run tests matching pattern
 
 Requires `opencode` CLI on PATH for `ascot run` / `ascot grade` (not needed for unit tests).
 
+To cut a new release (version bump, build, prune `dist/`, commit), see `docs/RELEASING.md`.
+
 ## Architecture
 
 The pipeline for `ascot run` flows through these modules in order:
