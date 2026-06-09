@@ -4,9 +4,9 @@ import json
 from pathlib import Path
 
 import pytest
-from opencode_wrapper import OpenCodeTimeoutError, RunResult
+from opencode_wrapper import OpenCodeError, OpenCodeTimeoutError, RunResult
 
-from ascot.models import TestCase, TestSuite
+from ascot.models import CaseResult, TestCase, TestSuite
 from ascot.runner import (
     CONTINUE_PROMPT,
     INSTRUCTION_REL,
@@ -16,6 +16,7 @@ from ascot.runner import (
     _preserve_workspace_best_effort,
     _strip_delta_lines,
     build_permission,
+    build_report,
 )
 
 
@@ -292,3 +293,93 @@ class TestRunSession:
 
         assert holder[0].prompts == []
         assert merged.turns == 0
+
+
+class TestBuildReport:
+    def test_sums_across_results(self):
+        results = [
+            CaseResult(case_id="a", score=3, max_score=5, turns=2,
+                       token_usage={"total": 100}, total_cost=0.1, duration_s=1.0),
+            CaseResult(case_id="b", score=5, max_score=5, turns=4,
+                       token_usage={"total": 200}, total_cost=0.2, duration_s=2.0),
+        ]
+        report = build_report("suite", "run-001", results,
+                              benchmark_model="m1", grading_model="m2")
+        assert report.total == 2
+        assert report.total_score == 8
+        assert report.max_score == 10
+        assert report.total_turns == 6
+        assert report.total_tokens == 300
+        assert abs(report.total_cost - 0.3) < 1e-9
+        assert report.total_duration_s == 3.0
+        assert report.benchmark_model == "m1"
+        assert report.grading_model == "m2"
+
+    def test_empty_results(self):
+        report = build_report("suite", "run-001", [])
+        assert report.total == 0
+        assert report.total_score == 0
+        assert report.max_score == 0
+
+
+class TestResolveTestScript:
+    def test_none_when_unset(self, tmp_path):
+        runner = _make_runner(tmp_path)
+        assert runner._resolve_test_script(TestCase(id="c", prompt="x")) is None
+
+    def test_relative_resolves_against_testcases_dir(self, tmp_path):
+        runner = _make_runner(tmp_path)
+        runner.testcases_dir = tmp_path / "tc"
+        tc = TestCase(id="c", prompt="x", test_script="verify.py")
+        assert runner._resolve_test_script(tc) == (tmp_path / "tc" / "verify.py").resolve()
+
+    def test_absolute_path_kept(self, tmp_path):
+        runner = _make_runner(tmp_path)
+        abs_script = (tmp_path / "abs" / "v.py").resolve()
+        tc = TestCase(id="c", prompt="x", test_script=str(abs_script))
+        assert runner._resolve_test_script(tc) == abs_script
+
+
+class TestRunSingle:
+    async def test_happy_path_grades_via_test_script(self, tmp_path, monkeypatch):
+        runner = _make_runner(tmp_path)
+        _, runner.run_dir = runner.store.next_run_dir()
+
+        script = tmp_path / "test_verify.py"
+        script.write_text("def test_ok():\n    assert True\n")
+
+        _install_fake_session(
+            monkeypatch, [],
+            script=[lambda s: _result("done")], sentinel_on_turn=1,
+        )
+
+        tc = TestCase(id="c1", prompt="go", timeout_s=30, max_continues=0,
+                      test_script=str(script))
+        cr = await runner._run_single(tc, trial_num=1)
+
+        assert cr.error is None
+        assert cr.score == 1
+        assert cr.max_score == 1
+        assert cr.signaled_completion is True
+        # result was persisted
+        result_path = runner.store.trial_dir(runner.run_dir, "c1", 1) / "result.json"
+        assert result_path.exists()
+
+    async def test_error_path_returns_error_result(self, tmp_path, monkeypatch):
+        runner = _make_runner(tmp_path)
+        _, runner.run_dir = runner.store.next_run_dir()
+
+        def boom(s):
+            raise OpenCodeError("session blew up")
+
+        _install_fake_session(
+            monkeypatch, [], script=[boom], sentinel_on_turn=None,
+        )
+
+        tc = TestCase(id="c1", prompt="go", timeout_s=30, max_continues=0)
+        cr = await runner._run_single(tc, trial_num=1)
+
+        assert cr.score == 0
+        assert "OpenCodeError" in cr.error
+        result_path = runner.store.trial_dir(runner.run_dir, "c1", 1) / "result.json"
+        assert result_path.exists()

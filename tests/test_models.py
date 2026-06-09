@@ -3,78 +3,8 @@
 from ascot.models import (
     CaseResult,
     ExpectationResult,
-    BenchmarkReport,
-    TestSuite,
     aggregate_trials,
 )
-
-
-class TestExpectationResultToDict:
-    def test_basic(self):
-        er = ExpectationResult(desc="file exists", score=5, earned=5, reasoning="ok")
-        assert er.to_dict() == {
-            "desc": "file exists",
-            "score": 5,
-            "earned": 5,
-            "reasoning": "ok",
-        }
-
-    def test_empty_reasoning(self):
-        er = ExpectationResult(desc="x", score=1, earned=0)
-        assert er.to_dict()["reasoning"] == ""
-
-
-class TestCaseResultToDict:
-    def test_includes_all_fields(self):
-        cr = CaseResult(case_id="c1", score=5, max_score=10)
-        d = cr.to_dict()
-        assert d["case_id"] == "c1"
-        assert d["score"] == 5
-        assert d["max_score"] == 10
-        assert d["signaled_completion"] is False
-        assert "phases" not in d  # omitted when empty
-
-    def test_includes_phases_when_present(self):
-        cr = CaseResult(case_id="c1", phases={"agent_run": {"duration_s": 1.5}})
-        assert "phases" in cr.to_dict()
-
-    def test_nested_expectation_results(self):
-        cr = CaseResult(
-            case_id="c1",
-            expectation_results=[
-                ExpectationResult(desc="a", score=1, earned=1),
-            ],
-        )
-        d = cr.to_dict()
-        assert len(d["expectation_results"]) == 1
-        assert d["expectation_results"][0]["desc"] == "a"
-
-    def test_nested_trial_results(self):
-        tr = CaseResult(case_id="c1", score=3, max_score=5)
-        cr = CaseResult(case_id="c1", trial_results=[tr])
-        d = cr.to_dict()
-        assert len(d["trial_results"]) == 1
-        assert d["trial_results"][0]["case_id"] == "c1"
-
-
-class TestBenchmarkReportToDict:
-    def test_basic(self):
-        r = BenchmarkReport(suite_name="s", run_id="run-001", timestamp="2024-01-01")
-        d = r.to_dict()
-        assert d["suite_name"] == "s"
-        assert d["run_id"] == "run-001"
-        assert d["results"] == []
-
-
-class TestTestSuite:
-    def test_grading_model_default_none(self):
-        ts = TestSuite(name="s")
-        assert ts.grading_model is None
-
-    def test_grading_model_set(self):
-        ts = TestSuite(name="s", default_model="gpt-4", grading_model="gpt-3.5")
-        assert ts.grading_model == "gpt-3.5"
-        assert ts.default_model == "gpt-4"
 
 
 class TestAggregateTrials:

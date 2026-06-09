@@ -6,10 +6,16 @@ from types import SimpleNamespace
 from ascot.graders import (
     _copy_events_for_judge,
     _dump_judge_debug,
+    _extract_stats,
+    _extract_text_from_result,
     _has_verdict_issue,
+    _list_workspace_files,
+    _map_results,
     _read_verdict_file,
+    _setup_judge_workspace,
+    error_result,
 )
-from ascot.models import Expectation, ExpectationResult
+from ascot.models import Expectation, ExpectationResult, TestCase
 
 
 def _write_verdict(judge_ws, obj):
@@ -308,3 +314,123 @@ class TestDumpJudgeDebug:
             _fake_run_result("text"),
             case_id="my_case",
         )
+
+
+class TestSetupJudgeWorkspace:
+    """Guards the regression where _setup_judge_workspace called a renamed
+    helper (_copy_events_without_reasoning) that no longer existed, crashing
+    the judge for any case with expectations."""
+
+    def test_copies_output_and_strips_events(self, tmp_path):
+        case_dir = tmp_path / "case"
+        (case_dir / "workspace").mkdir(parents=True)
+        (case_dir / "workspace" / "result.txt").write_text("answer")
+        (case_dir / "events.jsonl").write_text("".join(json.dumps(e) + "\n" for e in [
+            {"type": "reasoning", "text": "thinking"},
+            {"type": "message.part.delta", "properties": {"delta": "x"}},
+            {"type": "tool_use", "part": {"tool": "bash"}},
+        ]))
+
+        judge_ws = _setup_judge_workspace(case_dir)
+
+        assert (judge_ws / "output" / "result.txt").read_text() == "answer"
+        kept = [json.loads(l) for l in (judge_ws / "events.jsonl").read_text().splitlines() if l.strip()]
+        assert [e["type"] for e in kept] == ["tool_use"]
+
+    def test_handles_missing_workspace_and_events(self, tmp_path):
+        case_dir = tmp_path / "case"
+        case_dir.mkdir()
+        judge_ws = _setup_judge_workspace(case_dir)
+        assert judge_ws.is_dir()
+        assert not (judge_ws / "output").exists()
+        assert not (judge_ws / "events.jsonl").exists()
+
+
+class TestListWorkspaceFiles:
+    def test_lists_files_excluding_opencode(self, tmp_path):
+        (tmp_path / "a.txt").write_text("hello")
+        (tmp_path / ".opencode").mkdir()
+        (tmp_path / ".opencode" / "config.json").write_text("{}")
+
+        listing = _list_workspace_files(tmp_path)
+
+        assert "a.txt" in listing
+        assert "config.json" not in listing
+
+    def test_empty_dir(self, tmp_path):
+        assert _list_workspace_files(tmp_path) == "  (no files)"
+
+    def test_truncates_at_max_files(self, tmp_path):
+        for i in range(5):
+            (tmp_path / f"f{i}.txt").write_text("x")
+        listing = _list_workspace_files(tmp_path, max_files=2)
+        assert "truncated at 2" in listing
+
+
+class TestExtractStats:
+    def test_with_token_usage(self):
+        tu = SimpleNamespace(total=100, input=60, output=40,
+                             reasoning=5, cache_read=10, cache_write=2)
+        rr = SimpleNamespace(token_usage=tu, total_cost=0.5, turns=3)
+        stats = _extract_stats(rr)
+        assert stats["tokens"]["total"] == 100
+        assert stats["tokens"]["cache_write"] == 2
+        assert stats["cost"] == 0.5
+        assert stats["turns"] == 3
+
+    def test_without_token_usage(self):
+        rr = SimpleNamespace(total_cost=0.0, turns=1)  # no token_usage attr
+        stats = _extract_stats(rr)
+        assert stats["tokens"] == {}
+        assert stats["turns"] == 1
+
+
+class TestExtractTextFromResult:
+    def test_returns_final_text(self):
+        rr = SimpleNamespace(final_text="the answer", events=[])
+        assert _extract_text_from_result(rr) == "the answer"
+
+    def test_falls_back_to_fuzzy_on_json_leak(self, monkeypatch):
+        monkeypatch.setattr("opencode_wrapper.run_result_fuzzy_text",
+                            lambda r: "clean fuzzy text")
+        rr = SimpleNamespace(final_text='{"type": "tool"}', events=[])
+        assert _extract_text_from_result(rr) == "clean fuzzy text"
+
+    def test_falls_back_to_tool_outputs(self, monkeypatch):
+        monkeypatch.setattr("opencode_wrapper.run_result_fuzzy_text", lambda r: "")
+        rr = SimpleNamespace(
+            final_text="",
+            events=[
+                {"type": "tool_use",
+                 "part": {"state": {"output": "computed result"}}},
+                {"type": "tool_use",
+                 "part": {"state": {"output": "<html ignored>"}}},
+            ],
+        )
+        assert _extract_text_from_result(rr) == "computed result"
+
+
+class TestMapResults:
+    def test_maps_by_index_and_marks_missing(self):
+        exps = [Expectation(desc="a", score=5), Expectation(desc="b", score=3)]
+        raw = [{"index": 0, "passed": True, "reasoning": "good"}]
+        results = _map_results(raw, exps)
+        assert results[0].earned == 5
+        assert results[0].reasoning == "good"
+        assert results[1].earned == 0
+        assert results[1].reasoning == "Missing from judge response"
+
+
+class TestErrorResult:
+    def test_with_test_case_sums_max_score(self):
+        tc = TestCase(id="c", prompt="go", expectations=[
+            Expectation(desc="a", score=5), Expectation(desc="b", score=3)])
+        cr = error_result("c", ValueError("boom"), tc)
+        assert cr.score == 0
+        assert cr.max_score == 8
+        assert cr.error == "ValueError: boom"
+
+    def test_without_test_case(self):
+        cr = error_result("c", RuntimeError("x"))
+        assert cr.max_score == 0
+        assert cr.error == "RuntimeError: x"
