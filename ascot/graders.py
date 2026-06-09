@@ -86,7 +86,7 @@ def _setup_judge_workspace(case_dir: Path) -> Path:
     # Copy events log, stripping reasoning parts the judge doesn't need
     events_src = case_dir / "events.jsonl"
     if events_src.exists():
-        _copy_events_without_reasoning(events_src, judge_ws / "events.jsonl")
+        _copy_events_for_judge(events_src, judge_ws / "events.jsonl")
 
     return judge_ws
 

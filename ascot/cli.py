@@ -28,6 +28,7 @@ def main(argv: list[str] | None = None) -> None:
     run_p.add_argument("testcases", help="Path to test cases YAML file")
     run_p.add_argument("--output", "-o", default="./benchmark", help="Output directory")
     run_p.add_argument("--model", "-m", help="Override model for all cases")
+    run_p.add_argument("--grading-model", help="Override model for the LLM judge")
     run_p.add_argument("--concurrency", "-c", type=int, default=4, help="Parallel case limit")
     run_p.add_argument("--timeout", "-t", type=float, help="Override per-case timeout (seconds)")
     run_p.add_argument("--binary", default="opencode", help="OpenCode binary path")
@@ -148,6 +149,7 @@ async def _cmd_run(args: argparse.Namespace) -> None:
         venv=venv_path,
         trials=args.trials,
         inherit_user_config=args.inherit_user_config,
+        grading_model=args.grading_model,
     )
 
     trial_info = f" x {args.trials} trials" if args.trials > 1 else ""

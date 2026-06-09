@@ -207,12 +207,13 @@ class BenchmarkRunner:
         venv: Path | None = None,
         trials: int = 1,
         inherit_user_config: bool = False,
+        grading_model: str | None = None,
     ):
         self.suite_dir = suite_dir
         self.test_suite = test_suite
         self.output_dir = output_dir
         self.model = model or test_suite.default_model
-        self.grading_model = test_suite.grading_model or test_suite.default_model
+        self.grading_model = grading_model or test_suite.grading_model or test_suite.default_model
         self.testcases_dir = testcases_dir
         self.concurrency = concurrency
         self.permission = build_permission(suite_dir)
