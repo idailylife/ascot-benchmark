@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS ascot_runs (
   source_path TEXT NULL,
   benchmark_model VARCHAR(255) NULL,
   grading_model VARCHAR(255) NULL,
+  ascot_version VARCHAR(64) NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uq_ascot_runs_identity (suite_name, run_id, run_timestamp),
@@ -105,6 +106,17 @@ def _add_runs_model_columns(cur: Any) -> None:
         cur.execute("ALTER TABLE ascot_runs " + ", ".join(adds))
 
 
+def _add_runs_ascot_version_column(cur: Any) -> None:
+    """Add ascot_version to ascot_runs if missing (portable, pre-checks)."""
+    cur.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = DATABASE() AND table_name = 'ascot_runs' "
+        "AND column_name = 'ascot_version'"
+    )
+    if not cur.fetchall():
+        cur.execute("ALTER TABLE ascot_runs ADD COLUMN ascot_version VARCHAR(64) NULL")
+
+
 # Ordered schema migrations. Each entry is (version, description, statements)
 # where a statement is either a SQL string or a callable(cursor) -> None.
 # Statements MUST be idempotent — either via `CREATE TABLE IF NOT EXISTS` style
@@ -113,6 +125,7 @@ def _add_runs_model_columns(cur: Any) -> None:
 MIGRATIONS: list[tuple[int, str, list[Any]]] = [
     (1, "initial schema (runs + per-trial results)", [CREATE_RUNS_TABLE, CREATE_TRIALS_TABLE]),
     (2, "add benchmark_model + grading_model to ascot_runs", [_add_runs_model_columns]),
+    (3, "add ascot_version to ascot_runs", [_add_runs_ascot_version_column]),
 ]
 
 
@@ -120,8 +133,9 @@ INSERT_RUN_SQL = """
 INSERT INTO ascot_runs (
   suite_name, run_id, run_timestamp, num_trials, total_cases,
   total_score, max_score, score_pct, total_turns, total_tokens,
-  total_duration_s, total_cost, source_path, benchmark_model, grading_model
-) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+  total_duration_s, total_cost, source_path, benchmark_model, grading_model,
+  ascot_version
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON DUPLICATE KEY UPDATE
   num_trials = VALUES(num_trials),
   total_cases = VALUES(total_cases),
@@ -135,6 +149,7 @@ ON DUPLICATE KEY UPDATE
   source_path = VALUES(source_path),
   benchmark_model = VALUES(benchmark_model),
   grading_model = VALUES(grading_model),
+  ascot_version = VALUES(ascot_version),
   updated_at = CURRENT_TIMESTAMP
 """
 
@@ -251,6 +266,7 @@ def publish_run(
                     str(run_path),
                     report.get("benchmark_model"),
                     report.get("grading_model"),
+                    report.get("ascot_version") or _publish_time_version(),
                 ),
             )
             cur.execute(
@@ -288,6 +304,16 @@ def publish_run(
         "case_count": len(report.get("results", [])),
         "trial_count": trial_count,
     }
+
+
+def _publish_time_version() -> str | None:
+    """Fallback for reports predating the run-time ascot_version field."""
+    try:
+        from . import __version__
+
+        return __version__
+    except Exception:
+        return None
 
 
 def _trial_params(

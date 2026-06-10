@@ -125,6 +125,7 @@ class BenchmarkReport:
     num_trials: int = 1
     benchmark_model: str | None = None
     grading_model: str | None = None
+    ascot_version: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -142,6 +143,7 @@ class BenchmarkReport:
             "num_trials": self.num_trials,
             "benchmark_model": self.benchmark_model,
             "grading_model": self.grading_model,
+            "ascot_version": self.ascot_version,
         }
 
 

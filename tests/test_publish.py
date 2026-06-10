@@ -323,9 +323,11 @@ def test_publish_run_writes_run_and_trial_rows(tmp_path):
     run_inserts = [item for item in conn.executed if "INSERT INTO ascot_runs" in item[0]]
     assert len(run_inserts) == 1
     assert run_inserts[0][1][7] == 0.7  # score_pct
-    # benchmark_model + grading_model trail the value tuple
-    assert run_inserts[0][1][-2] is None
-    assert run_inserts[0][1][-1] is None
+    # benchmark_model + grading_model + ascot_version trail the value tuple
+    assert run_inserts[0][1][-3] is None  # benchmark_model
+    assert run_inserts[0][1][-2] is None  # grading_model
+    # ascot_version falls back to the publishing install's version
+    assert run_inserts[0][1][-1] is not None
 
     # case_results table no longer exists
     case_inserts = [
@@ -380,8 +382,35 @@ def test_publish_run_writes_model_columns(tmp_path):
     publish_run(run_dir, "mysql://user:pass@example.com/ascot", connector=connector)
 
     run_inserts = [item for item in conn.executed if "INSERT INTO ascot_runs" in item[0]]
-    assert run_inserts[0][1][-2] == "opencode/sonnet-4-6"
-    assert run_inserts[0][1][-1] == "opencode/haiku-4-5"
+    assert run_inserts[0][1][-3] == "opencode/sonnet-4-6"
+    assert run_inserts[0][1][-2] == "opencode/haiku-4-5"
+
+
+def test_publish_run_writes_ascot_version_from_report(tmp_path):
+    report = _sample_report()
+    report["ascot_version"] = "9.9.9"
+    run_dir = _write_report(tmp_path, report)
+    conn = FakeConnection()
+    connector = FakeConnector(conn)
+
+    publish_run(run_dir, "mysql://user:pass@example.com/ascot", connector=connector)
+
+    run_inserts = [item for item in conn.executed if "INSERT INTO ascot_runs" in item[0]]
+    assert run_inserts[0][1][-1] == "9.9.9"
+
+
+def test_publish_run_falls_back_to_install_version(tmp_path):
+    # Report predating the ascot_version field: column gets the publishing version.
+    report = _sample_report()
+    report.pop("ascot_version", None)
+    run_dir = _write_report(tmp_path, report)
+    conn = FakeConnection()
+    connector = FakeConnector(conn)
+
+    publish_run(run_dir, "mysql://user:pass@example.com/ascot", connector=connector)
+
+    run_inserts = [item for item in conn.executed if "INSERT INTO ascot_runs" in item[0]]
+    assert run_inserts[0][1][-1] is not None
 
 
 def test_publish_run_requires_report_json(tmp_path):

@@ -21,6 +21,7 @@ from opencode_wrapper import (
 )
 from opencode_wrapper.config import loads_jsonc
 
+from . import __version__
 from .graders import error_result, grade_case
 from .models import BenchmarkReport, CaseResult, TestCase, TestSuite, aggregate_trials
 from .store import RunStore
@@ -177,6 +178,7 @@ def build_report(
         total_cost=total_cost,
         benchmark_model=benchmark_model,
         grading_model=grading_model,
+        ascot_version=__version__,
     )
 
 
