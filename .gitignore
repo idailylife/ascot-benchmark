@@ -8,6 +8,7 @@ build/
 
 # Virtual environments
 .venv/
+.venv_py38/
 venv/
 env/
 
