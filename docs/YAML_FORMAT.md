@@ -26,6 +26,8 @@ test_cases:
     agent: null              # optional, per-case
     tags: []                 # optional, for --tag filtering
     max_continues: 3         # optional, auto-continue nudges (default 3; 0 = no nudges)
+    append_grading_prompt: | # optional, extra text appended to the LLM judge prompt
+      <extra grading guidance>
 ```
 
 ## Fields
@@ -56,6 +58,7 @@ test_cases:
 | `agent` | no | Agent override |
 | `tags` | no | Tags for `--tag` filtering |
 | `max_continues` | no | Auto-continue nudge budget (default: 3; 0 = no nudges); inherits from suite-level `default_max_continues`. See [Auto-continue](#auto-continue). |
+| `append_grading_prompt` | no | Extra text appended to the end of the LLM judge prompt for this case. Use it to give the judge case-specific grading guidance (e.g. how to read a particular file type). Only affects cases with `expectations`. |
 
 ## Expectations (LLM-judged)
 

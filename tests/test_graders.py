@@ -1,6 +1,7 @@
 """Tests for ascot.graders._read_verdict_file."""
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 from ascot.graders import (
@@ -419,6 +420,47 @@ class TestMapResults:
         assert results[0].reasoning == "good"
         assert results[1].earned == 0
         assert results[1].reasoning == "Missing from judge response"
+
+
+class TestAppendGradingPrompt:
+    class _FakeClient:
+        def __init__(self):
+            self.last_prompt = None
+
+        async def async_run(self, prompt, ws, run_cfg=None, timeout_s=None):
+            self.last_prompt = prompt
+            # Write a valid verdict so llm_judge succeeds.
+            (Path(ws) / "verdict.json").write_text(json.dumps(
+                {"results": [{"index": 0, "passed": True, "reasoning": "ok"}]}))
+            return SimpleNamespace(
+                final_text="verdict written", events=[],
+                exit_code=0, total_cost=0.0, turns=1,
+            )
+
+    async def test_appended_text_in_judge_prompt(self, tmp_path):
+        from ascot.graders import llm_judge
+
+        (tmp_path / "workspace").mkdir()
+        tc = TestCase(
+            id="c", prompt="go",
+            expectations=[Expectation(desc="a", score=1)],
+            append_grading_prompt="IMPORTANT: read .foo files as JSON.",
+        )
+        client = self._FakeClient()
+        await llm_judge(tmp_path, tc, client)
+        assert "IMPORTANT: read .foo files as JSON." in client.last_prompt
+
+    async def test_no_append_when_unset(self, tmp_path):
+        from ascot.graders import llm_judge
+
+        (tmp_path / "workspace").mkdir()
+        tc = TestCase(
+            id="c", prompt="go",
+            expectations=[Expectation(desc="a", score=1)],
+        )
+        client = self._FakeClient()
+        await llm_judge(tmp_path, tc, client)
+        assert client.last_prompt.rstrip().endswith('"verdict written").')
 
 
 class TestErrorResult:

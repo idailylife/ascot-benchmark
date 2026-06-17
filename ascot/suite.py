@@ -49,6 +49,7 @@ def _parse_test_case(raw: dict[str, Any], defaults: dict[str, Any]) -> TestCase:
         tags=raw.get("tags", []),
         test_script=raw.get("test_script"),
         max_continues=raw.get("max_continues", defaults.get("default_max_continues", 3)),
+        append_grading_prompt=raw.get("append_grading_prompt"),
     )
 
 

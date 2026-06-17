@@ -57,6 +57,8 @@ class RunStore:
         }
         if test_case.test_script is not None:
             data["test_script"] = test_case.test_script
+        if test_case.append_grading_prompt is not None:
+            data["append_grading_prompt"] = test_case.append_grading_prompt
         if test_script_path is not None:
             data["test_script_path"] = str(test_script_path)
         if test_script_timeout_s is not None:

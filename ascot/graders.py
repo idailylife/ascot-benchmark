@@ -181,6 +181,9 @@ async def llm_judge(
             "confirmation (e.g. \"verdict written\")."
         )
 
+        if test_case.append_grading_prompt:
+            sections.append(test_case.append_grading_prompt)
+
         prompt = "\n".join(sections)
         cfg = RunConfig(
             model=grading_model,
@@ -497,6 +500,7 @@ async def regrade_run(
             prompt=eval_data["prompt"],
             expectations=expectations,
             test_script=eval_data.get("test_script"),
+            append_grading_prompt=eval_data.get("append_grading_prompt"),
         )
         case_order.append(tc.id)
 

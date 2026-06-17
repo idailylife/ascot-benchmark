@@ -46,6 +46,7 @@ class TestCase:
     tags: list[str] = field(default_factory=list)
     test_script: str | None = None
     max_continues: int = 3
+    append_grading_prompt: str | None = None
 
 
 @dataclass

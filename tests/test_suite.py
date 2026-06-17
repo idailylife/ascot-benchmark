@@ -164,6 +164,19 @@ class TestLoadTestSuite:
         suite = load_test_suite(tmp_dir / "t.yaml")
         assert suite.grading_model is None
 
+    def test_append_grading_prompt(self, tmp_dir):
+        data = {
+            "name": "s",
+            "test_cases": [
+                {"id": "c1", "prompt": "hi", "append_grading_prompt": "read .foo as JSON"},
+                {"id": "c2", "prompt": "hi"},  # not set -> None
+            ],
+        }
+        self._write_yaml(tmp_dir / "t.yaml", data)
+        suite = load_test_suite(tmp_dir / "t.yaml")
+        assert suite.test_cases[0].append_grading_prompt == "read .foo as JSON"
+        assert suite.test_cases[1].append_grading_prompt is None
+
     def test_max_continues_defaults_to_three(self, tmp_dir):
         data = {"name": "s", "test_cases": [{"id": "c1", "prompt": "hi"}]}
         self._write_yaml(tmp_dir / "t.yaml", data)
