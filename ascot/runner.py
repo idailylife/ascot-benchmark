@@ -92,9 +92,18 @@ def _merge_results(results: list[RunResult]) -> RunResult:
     return merged
 
 
+# Event types kept out of events.jsonl as they stream (passed to the wrapper's
+# `log_exclude_types`). The redundant token-by-token `message.part.delta` chunks
+# never hit disk — the live file stays lean during a run instead of being
+# rewritten only after the trial finishes. The final `message.part.updated`
+# snapshot retains each part's full text; reasoning entries are kept for review.
+_LOG_EXCLUDE_TYPES = frozenset({"message.part.delta"})
+
+
 def _strip_delta_lines(events_path: Path) -> None:
     """Rewrite events.jsonl in place, dropping `message.part.delta` lines.
 
+    Safety net for logs not produced with `_LOG_EXCLUDE_TYPES` (e.g. older runs).
     Session/server mode streams token-by-token `message.part.delta` chunks; the
     final `message.part.updated` snapshot already carries each part's full text,
     so the deltas are pure redundancy that can bloat the file 5-10x. Reasoning
@@ -400,7 +409,7 @@ class BenchmarkRunner:
         results: list[RunResult] = []
         async with OpenCodeSession(
             self.client, str(ws), run_cfg=cfg, log_file=events_path,
-            on_permission=None, on_question=None,
+            log_exclude_types=_LOG_EXCLUDE_TYPES, on_permission=None, on_question=None,
         ) as session:
             prompt = tc.prompt
             continues = 0

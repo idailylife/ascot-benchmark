@@ -12,6 +12,7 @@ from ascot.runner import (
     INSTRUCTION_REL,
     SENTINEL_REL,
     BenchmarkRunner,
+    _LOG_EXCLUDE_TYPES,
     _merge_results,
     _preserve_workspace_best_effort,
     _strip_delta_lines,
@@ -43,6 +44,14 @@ class TestStripDeltaLines:
             {"type": "message.part.delta", "properties": {}}) + "\n")
         _strip_delta_lines(p)
         assert p.read_text() == "not json\n"
+
+
+class TestLogExcludeTypes:
+    def test_excludes_deltas_only(self):
+        assert isinstance(_LOG_EXCLUDE_TYPES, frozenset)
+        assert "message.part.delta" in _LOG_EXCLUDE_TYPES
+        assert "message.part.updated" not in _LOG_EXCLUDE_TYPES
+        assert "reasoning" not in _LOG_EXCLUDE_TYPES
 
 
 def test_build_permission_reads_json_with_schema_url(tmp_path):
