@@ -13,6 +13,15 @@ test_cases:
       Create a file called hello.txt that contains the text "Hello, World!".
     test_script: ./verifiers/test_hello_file.py
 
+  - id: create-hello-file-weighted
+    description: "Create hello.txt, graded with weighted pytest tests"
+    prompt: |
+      Create a file called hello.txt that contains the text "Hello, World!".
+    # Verifier uses @pytest.mark.score(N): file-exists is worth 1, content is worth 4.
+    test_script: ./verifiers/test_hello_weighted.py
+    tags:
+      - weighted
+
   - id: create-greeting-json
     description: "Create a JSON greeting file"
     prompt: |

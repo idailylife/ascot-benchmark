@@ -59,6 +59,7 @@ def run_test_script(
                     f"--junit-xml={junit_path}",
                     "-q", "--tb=line",
                     "-p", "no:cacheprovider",
+                    "-p", "ascot._score_plugin",
                 ],
                 cwd=str(workspace_dir),
                 capture_output=True, text=True,
@@ -103,7 +104,9 @@ def _single_failure(desc: str, reasoning: str) -> ExpectationResult:
 def _parse_junit(junit_path: Path) -> list[ExpectationResult]:
     """Parse pytest --junit-xml into ExpectationResults.
 
-    Each <testcase> = one ExpectationResult worth 1 point.
+    Each <testcase> = one ExpectationResult. Its point weight defaults to 1 but
+    can be overridden by a @pytest.mark.score(N) marker, which the ascot._score_plugin
+    serializes into a <property name="score" value="N"/> child of the testcase.
     Skipped tests are excluded from scoring (not added to the list).
     """
     try:
@@ -120,6 +123,7 @@ def _parse_junit(junit_path: Path) -> list[ExpectationResult]:
             continue
 
         name = tc.get("name", "(unknown)")
+        weight = _score_of(tc)
         node = tc.find("failure")
         if node is None:
             node = tc.find("error")
@@ -132,11 +136,22 @@ def _parse_junit(junit_path: Path) -> list[ExpectationResult]:
             else:
                 reasoning = msg or text or "(no failure message)"
             results.append(ExpectationResult(
-                desc=name, score=1, earned=0,
+                desc=name, score=weight, earned=0,
                 reasoning=reasoning[:_REASONING_MAX],
             ))
         else:
             results.append(ExpectationResult(
-                desc=name, score=1, earned=1, reasoning="",
+                desc=name, score=weight, earned=weight, reasoning="",
             ))
     return results
+
+
+def _score_of(tc: ET.Element) -> int:
+    """Read the point weight from a <testcase>'s score property (default 1)."""
+    for prop in tc.iter("property"):
+        if prop.get("name") == "score":
+            try:
+                return max(0, int(float(prop.get("value", "1"))))
+            except (TypeError, ValueError):
+                return 1
+    return 1

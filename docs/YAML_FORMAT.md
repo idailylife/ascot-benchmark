@@ -77,7 +77,7 @@ pytest <test_script> --junit-xml=<tmp> -q --tb=line -p no:cacheprovider
 ```
 
 Rules:
-- **One pytest test = 1 point.** A test that passes earns 1 point; a test that fails earns 0. Weighting per pytest test is not supported in v1.
+- **One pytest test = 1 point by default.** A test that passes earns its full weight; a test that fails earns 0. Weight a test with the `@pytest.mark.score(N)` decorator (see [Weighting tests](#weighting-tests)).
 - **Skipped tests are excluded** from scoring (they don't appear in `expectation_results`).
 - The script's relative file paths resolve against the case workspace, so the script can `open("output.txt")` to inspect the agent's output directly.
 - Default timeout is 60 s (override with suite-level `default_test_script_timeout_s`).
@@ -92,6 +92,23 @@ Rules:
   Only the test named after `::` runs; existence is checked against the file part. An unknown test name surfaces as a single failed `ExpectationResult` with pytest's "no tests collected" message.
 
 A case with only `test_script` and no `expectations` skips the LLM judge entirely — no judge cost, no judge tempdir. A case with both runs `test_script` first, then the LLM judge for the fuzzy expectations; the two result lists are concatenated.
+
+### Weighting tests
+
+By default each pytest test is worth 1 point. To weight a test, decorate it with `@pytest.mark.score(N)`, mirroring the `score` field on `expectations`:
+
+```python
+import pytest
+
+@pytest.mark.score(5)
+def test_title_present():
+    assert Path("page1.md").exists()
+
+def test_file_created():   # no marker → worth 1 point
+    assert Path("page1.md").exists()
+```
+
+The above file is worth 6 points max (5 + 1). The `score` marker is registered by Ascot's built-in pytest plugin, so no `conftest.py` or marker registration is needed in your verifier. A failing weighted test earns 0 of its `N` points. A non-numeric or missing argument falls back to weight 1.
 
 ### pytest dependency
 

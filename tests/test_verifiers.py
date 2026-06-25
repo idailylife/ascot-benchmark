@@ -175,3 +175,86 @@ class TestRunTestScript:
         assert "file not found" in results[0].reasoning
         # file part in reasoning, no `::` suffix
         assert "::" not in results[0].reasoning
+
+    def test_score_marker_weights_test(self, tmp_path):
+        """@pytest.mark.score(N) on a passing test sets both score and earned to N."""
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        script = _write(tmp_path / "test_x.py", (
+            "import pytest\n"
+            "@pytest.mark.score(5)\n"
+            "def test_weighted():\n    assert True\n"
+        ))
+
+        results = run_test_script(ws, script)
+
+        assert len(results) == 1
+        assert results[0].desc == "test_weighted"
+        assert results[0].score == 5
+        assert results[0].earned == 5
+
+    def test_score_marker_on_failing_test(self, tmp_path):
+        """A weighted test that fails earns 0 of its N points."""
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        script = _write(tmp_path / "test_x.py", (
+            "import pytest\n"
+            "@pytest.mark.score(5)\n"
+            "def test_weighted():\n    assert False, 'nope'\n"
+        ))
+
+        results = run_test_script(ws, script)
+
+        assert len(results) == 1
+        assert results[0].score == 5
+        assert results[0].earned == 0
+        assert results[0].reasoning != ""
+
+    def test_mixed_weighted_and_default(self, tmp_path):
+        """A marked test (weight 3) and an unmarked test (weight 1) coexist."""
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        script = _write(tmp_path / "test_x.py", (
+            "import pytest\n"
+            "@pytest.mark.score(3)\n"
+            "def test_heavy():\n    assert True\n"
+            "def test_light():\n    assert True\n"
+        ))
+
+        results = run_test_script(ws, script)
+
+        by_name = {r.desc: r for r in results}
+        assert by_name["test_heavy"].score == 3
+        assert by_name["test_heavy"].earned == 3
+        assert by_name["test_light"].score == 1
+        assert by_name["test_light"].earned == 1
+
+    def test_no_score_marker_defaults_to_1(self, tmp_path):
+        """Tests without the marker keep the original 1-point behavior."""
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        script = _write(tmp_path / "test_x.py", (
+            "def test_a():\n    assert True\n"
+        ))
+
+        results = run_test_script(ws, script)
+
+        assert len(results) == 1
+        assert results[0].score == 1
+        assert results[0].earned == 1
+
+    def test_invalid_score_value_falls_back_to_1(self, tmp_path):
+        """A non-numeric score argument falls back to weight 1 rather than erroring."""
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        script = _write(tmp_path / "test_x.py", (
+            "import pytest\n"
+            "@pytest.mark.score('oops')\n"
+            "def test_a():\n    assert True\n"
+        ))
+
+        results = run_test_script(ws, script)
+
+        assert len(results) == 1
+        assert results[0].score == 1
+        assert results[0].earned == 1
