@@ -14,6 +14,7 @@ from typing import Any
 from opencode_wrapper import (
     AsyncOpenCodeClient,
     OpenCodeError,
+    OpenCodeProcessError,
     OpenCodeSession,
     OpenCodeTimeoutError,
     RunConfig,
@@ -61,6 +62,25 @@ CONTINUE_PROMPT = (
     "the `.ascot/complete` file now as instructed. Otherwise, continue working until "
     "it is done."
 )
+
+# One retry; the readiness failure is occasional/transient (concurrent server
+# cold-starts racing their startup deadline), so a single restart — which runs
+# after the initial burst — almost always starts cleanly.
+_MAX_STARTUP_RETRIES = 1
+_STARTUP_FAILURE_MARKERS = ("did not announce readiness", "did not become healthy")
+
+
+def _is_startup_failure(e: Exception) -> bool:
+    """True for opencode serve startup failures that are safe to retry.
+
+    These are transient infra races (concurrent server cold-starts contending the
+    readiness deadline), not failures of the suite under test. Match on the stderr
+    marker rather than exit_code == -1 alone, since -1 is also produced by unrelated
+    process kills that should not be retried.
+    """
+    return isinstance(e, OpenCodeProcessError) and any(
+        m in (e.stderr or "") for m in _STARTUP_FAILURE_MARKERS
+    )
 
 
 def _merge_results(results: list[RunResult]) -> RunResult:
@@ -329,7 +349,20 @@ class BenchmarkRunner:
             trial_d = self.store.trial_dir(self.run_dir, tc.id, trial_num)
             events_path = trial_d / "events.jsonl"
             t0 = time.monotonic()
-            result = await self._run_session(tc, ws, cfg, events_path)
+            result = None
+            for attempt in range(_MAX_STARTUP_RETRIES + 1):
+                try:
+                    result = await self._run_session(tc, ws, cfg, events_path)
+                    break
+                except OpenCodeError as e:
+                    if attempt < _MAX_STARTUP_RETRIES and _is_startup_failure(e):
+                        log.warning(
+                            "Case %s trial %d: opencode startup failed (%s); "
+                            "retrying (%d/%d)",
+                            tc.id, trial_num, e, attempt + 1, _MAX_STARTUP_RETRIES,
+                        )
+                        continue
+                    raise
             duration = time.monotonic() - t0
             signaled_completion = (ws / SENTINEL_REL).exists()
 

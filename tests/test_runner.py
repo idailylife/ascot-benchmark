@@ -4,7 +4,12 @@ import json
 from pathlib import Path
 
 import pytest
-from opencode_wrapper import OpenCodeError, OpenCodeTimeoutError, RunResult
+from opencode_wrapper import (
+    OpenCodeError,
+    OpenCodeProcessError,
+    OpenCodeTimeoutError,
+    RunResult,
+)
 
 from ascot.models import CaseResult, TestCase, TestSuite
 from ascot.runner import (
@@ -13,6 +18,7 @@ from ascot.runner import (
     SENTINEL_REL,
     BenchmarkRunner,
     _LOG_EXCLUDE_TYPES,
+    _is_startup_failure,
     _merge_results,
     _preserve_workspace_best_effort,
     _strip_delta_lines,
@@ -172,13 +178,16 @@ class FakeSession:
     the completion sentinel before returning on a given 1-based turn.
     """
 
-    def __init__(self, ws_dir, *, script, sentinel_on_turn=None, **_):
+    def __init__(self, ws_dir, *, script, sentinel_on_turn=None, enter_error=None, **_):
         self.ws = Path(ws_dir)
         self.script = script
         self.sentinel_on_turn = sentinel_on_turn
+        self.enter_error = enter_error
         self.prompts: list[str] = []
 
     async def __aenter__(self):
+        if self.enter_error is not None:
+            raise self.enter_error
         return self
 
     async def __aexit__(self, *exc):
@@ -392,3 +401,106 @@ class TestRunSingle:
         assert "OpenCodeError" in cr.error
         result_path = runner.store.trial_dir(runner.run_dir, "c1", 1) / "result.json"
         assert result_path.exists()
+
+    def _install_sequential_sessions(self, monkeypatch, sessions):
+        """Hand out the queued FakeSessions in order across re-instantiations."""
+        queue = list(sessions)
+        created: list[FakeSession] = []
+
+        def factory(client, ws_dir, **kwargs):
+            sess = queue.pop(0)
+            sess.ws = Path(ws_dir)
+            created.append(sess)
+            return sess
+
+        monkeypatch.setattr("ascot.runner.OpenCodeSession", factory)
+        return created
+
+    async def test_retries_once_on_startup_failure(self, tmp_path, monkeypatch):
+        runner = _make_runner(tmp_path)
+        _, runner.run_dir = runner.store.next_run_dir()
+
+        script = tmp_path / "test_verify.py"
+        script.write_text("def test_ok():\n    assert True\n")
+
+        startup_err = OpenCodeProcessError(
+            exit_code=-1,
+            stderr="opencode serve did not announce readiness in 15.0s\n",
+        )
+        failing = FakeSession(tmp_path, script=[], enter_error=startup_err)
+        succeeding = FakeSession(
+            tmp_path, script=[lambda s: _result("done")], sentinel_on_turn=1,
+        )
+        created = self._install_sequential_sessions(
+            monkeypatch, [failing, succeeding],
+        )
+
+        tc = TestCase(id="c1", prompt="go", timeout_s=30, max_continues=0,
+                      test_script=str(script))
+        cr = await runner._run_single(tc, trial_num=1)
+
+        assert len(created) == 2  # retried after the startup failure
+        assert cr.error is None
+        assert cr.score == 1
+
+    async def test_no_retry_on_non_startup_error(self, tmp_path, monkeypatch):
+        runner = _make_runner(tmp_path)
+        _, runner.run_dir = runner.store.next_run_dir()
+
+        generic = FakeSession(
+            tmp_path, script=[], enter_error=OpenCodeError("boom"),
+        )
+        created = self._install_sequential_sessions(monkeypatch, [generic])
+
+        tc = TestCase(id="c1", prompt="go", timeout_s=30, max_continues=0)
+        cr = await runner._run_single(tc, trial_num=1)
+
+        assert len(created) == 1  # no retry for a non-startup error
+        assert cr.score == 0
+        assert "OpenCodeError" in cr.error
+
+    async def test_startup_failure_exhausts_retries(self, tmp_path, monkeypatch):
+        runner = _make_runner(tmp_path)
+        _, runner.run_dir = runner.store.next_run_dir()
+
+        def _startup_err():
+            return OpenCodeProcessError(
+                exit_code=-1,
+                stderr="opencode serve did not become healthy in 15.0s\n",
+            )
+
+        sessions = [
+            FakeSession(tmp_path, script=[], enter_error=_startup_err()),
+            FakeSession(tmp_path, script=[], enter_error=_startup_err()),
+        ]
+        created = self._install_sequential_sessions(monkeypatch, sessions)
+
+        tc = TestCase(id="c1", prompt="go", timeout_s=30, max_continues=0)
+        cr = await runner._run_single(tc, trial_num=1)
+
+        assert len(created) == 2  # initial attempt + one retry, then gives up
+        assert cr.score == 0
+        assert "OpenCodeProcessError" in cr.error
+
+
+class TestIsStartupFailure:
+    def test_readiness_marker_is_retryable(self):
+        e = OpenCodeProcessError(
+            exit_code=-1,
+            stderr="opencode serve did not announce readiness in 15.0s\n",
+        )
+        assert _is_startup_failure(e) is True
+
+    def test_healthy_marker_is_retryable(self):
+        e = OpenCodeProcessError(
+            exit_code=-1,
+            stderr="opencode serve did not become healthy in 15.0s\n",
+        )
+        assert _is_startup_failure(e) is True
+
+    def test_other_process_error_not_retryable(self):
+        e = OpenCodeProcessError(exit_code=1, stderr="some agent crash")
+        assert _is_startup_failure(e) is False
+
+    def test_non_process_error_not_retryable(self):
+        assert _is_startup_failure(OpenCodeError("boom")) is False
